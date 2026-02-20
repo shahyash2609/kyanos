@@ -280,16 +280,26 @@ func GetKernelVersion() *version.Version {
 	var si sysinfo.SysInfo
 	si.GetSysInfo()
 	release := si.Kernel.Release
+
 	v, err := version.NewVersion(release)
+	if err == nil {
+		return v
+	}
+
+	DefaultLog.Debugf("Parse kernel version failed: %v, try to sanitize and retry. release=%q", err, release)
+
+	// Trim common suffixes like:
+	//  - "6.6.97-gke"
+	//  - "6.6.97+"
+	//  - "6.6.97-xyz+abc"
+	if i := strings.IndexAny(release, "-+"); i != -1 {
+		release = release[:i]
+	}
+
+	v, err = version.NewVersion(release)
 	if err != nil {
-		DefaultLog.Debugf("Parse kernel version failed: %v, may be centos version, adjust and retry", err)
-		release = release[:strings.Index(release, "-")]
-		v, err = version.NewVersion(release)
-		if err != nil {
-			DefaultLog.Fatalf("Can't parse kernel version: %v, may be a bug, please submit a issue on http://github.com/hengyoush/kyanos", err)
-		} else {
-			return v
-		}
+		DefaultLog.Fatalf("Can't parse kernel version after sanitize: %v, release=%q", err, release)
+		return nil
 	}
 	return v
 }
