@@ -146,6 +146,8 @@ func TestParseRequest(t *testing.T) {
 	assert.Equal(t, "GET", httpReq.Method)
 	assert.Equal(t, "/abc", httpReq.Path)
 	assert.Equal(t, "www.baidu.com", httpReq.Host)
+	assert.NotNil(t, httpReq.Headers)
+	assert.Equal(t, "www.baidu.com", httpReq.Headers["Host"])
 }
 
 func TestParseResponse(t *testing.T) {
@@ -264,6 +266,7 @@ func TestHttpFilter_Filter(t *testing.T) {
 		TargetPathPrefix string
 		TargetHostName   string
 		TargetMethods    []string
+		TargetHeaders    map[string]string
 	}
 	type args struct {
 		parsedReq protocol.ParsedMessage
@@ -413,6 +416,42 @@ func TestHttpFilter_Filter(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "filter_by_header",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123", "Authorization": "Bearer token"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"X-Request-Id": "abc-123", "Authorization": "Bearer token"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "not_filter_by_header_missing_key",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"Other": "val"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "not_filter_by_header_wrong_value",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"X-Request-Id": "different"},
+				},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -422,6 +461,7 @@ func TestHttpFilter_Filter(t *testing.T) {
 				TargetPathPrefix: tt.fields.TargetPathPrefix,
 				TargetHostName:   tt.fields.TargetHostName,
 				TargetMethods:    tt.fields.TargetMethods,
+				TargetHeaders:    tt.fields.TargetHeaders,
 			}
 			assert.Equalf(t, tt.want, filter.Filter(tt.args.parsedReq, nil), "Filter(%v, %v)", tt.args.parsedReq, nil)
 		})

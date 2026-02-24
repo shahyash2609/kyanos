@@ -2,15 +2,17 @@ package cmd
 
 import (
 	"kyanos/agent/protocol"
+	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var httpCmd = &cobra.Command{
-	Use:   "http [--method METHODS|--path PATH|--path-regex REGEX|--path-prefix PREFIX|--host HOSTNAME]",
+	Use:   "http [--method METHODS|--path PATH|--path-regex REGEX|--path-prefix PREFIX|--host HOSTNAME|--header HEADER:VALUE]",
 	Short: "watch HTTP message",
-	Long:  `Filter HTTP messages based on method, path (strict, regex, prefix), or host. Filter flags are combined with AND(&&).`,
+	Long:  `Filter HTTP messages based on method, path (strict, regex, prefix), host, or request headers. Filter flags are combined with AND(&&).`,
 	Run: func(cmd *cobra.Command, args []string) {
 		methods, err := cmd.Flags().GetStringSlice("method")
 		if err != nil {
@@ -38,6 +40,11 @@ var httpCmd = &cobra.Command{
 		if err != nil {
 			logger.Fatalf("invalid path-prefix: %v\n", err)
 		}
+		headerPairs, err := cmd.Flags().GetStringSlice("header")
+		if err != nil {
+			logger.Fatalf("invalid header: %v\n", err)
+		}
+		targetHeaders := parseHeaderFilter(headerPairs)
 
 		options.MessageFilter = protocol.HttpFilter{
 			TargetPath:       path,
@@ -45,6 +52,7 @@ var httpCmd = &cobra.Command{
 			TargetPathPrefix: pathPrefix,
 			TargetHostName:   host,
 			TargetMethods:    methods,
+			TargetHeaders:    targetHeaders,
 		}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
@@ -58,6 +66,7 @@ func init() {
 	httpCmd.Flags().String("path", "", "Specify the HTTP path to monitor, like: '/foo/bar'")
 	httpCmd.Flags().String("path-regex", "", "Specify the regex for HTTP path to monitor, like: '\\/foo\\/bar\\/\\d+'")
 	httpCmd.Flags().String("path-prefix", "", "Specify the prefix of HTTP path to monitor, like: '/foo'")
+	httpCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value). Can be repeated. Example: --header 'Authorization: Bearer x' --header 'X-Request-Id: abc'")
 
 	httpCmd.Flags().SortFlags = false
 	httpCmd.PersistentFlags().SortFlags = false
@@ -65,4 +74,24 @@ func init() {
 	watchCmd.AddCommand(&copy)
 	copy2 := *httpCmd
 	statCmd.AddCommand(&copy2)
+}
+
+// parseHeaderFilter parses "Name: Value" strings and returns a map with canonical header keys.
+// Malformed entries (no colon) are skipped.
+func parseHeaderFilter(pairs []string) map[string]string {
+	out := make(map[string]string)
+	for _, s := range pairs {
+		s = strings.TrimSpace(s)
+		i := strings.Index(s, ":")
+		if i <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(s[:i])
+		val := strings.TrimSpace(s[i+1:])
+		if key == "" {
+			continue
+		}
+		out[http.CanonicalHeaderKey(key)] = val
+	}
+	return out
 }
