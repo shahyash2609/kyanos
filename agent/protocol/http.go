@@ -108,8 +108,10 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 			}
 		}
 	} else {
+		var reqBody []byte
 		if req.ContentLength > 0 {
-			reqBody, err := io.ReadAll(req.Body)
+			var err error
+			reqBody, err = io.ReadAll(req.Body)
 			if err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
 					return ParseResult{
@@ -126,6 +128,14 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 			}
 		}
 		readIndex := common.GetBufioReaderReadIndex(bufioReader)
+		displayBuf := []byte(buf[:readIndex])
+		if len(reqBody) > 0 {
+			if decompressed, ok := decompressHTTPBody(reqBody, req.Header.Get("Content-Encoding")); ok {
+				if headerEnd := strings.Index(buf[:readIndex], "\r\n\r\n"); headerEnd != -1 {
+					displayBuf = append([]byte(buf[:headerEnd+4]), decompressed...)
+				}
+			}
+		}
 		parseResult.ReadBytes = readIndex
 		parseResult.ParsedMessages = []ParsedMessage{
 			&ParsedHttpRequest{
@@ -134,7 +144,7 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 				Method:    req.Method,
 				Path:      req.URL.Path,
 				Headers:   copyFirstHeaderValues(req.Header),
-				buf:       []byte(buf[:readIndex]),
+				buf:       displayBuf,
 			},
 		}
 		parseResult.ParseState = Success

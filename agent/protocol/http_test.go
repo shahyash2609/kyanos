@@ -196,6 +196,42 @@ func buildHTTPResponse(statusLine string, headers map[string]string, body []byte
 	return b.String()
 }
 
+func buildHTTPRequest(method, path string, headers map[string]string, body []byte) string {
+	var b strings.Builder
+	b.WriteString(method + " " + path + " HTTP/1.1\r\n")
+	for k, v := range headers {
+		b.WriteString(k + ": " + v + "\r\n")
+	}
+	b.WriteString("\r\n")
+	if len(body) > 0 {
+		b.Write(body)
+	}
+	return b.String()
+}
+
+func TestParseRequest_GzipBody(t *testing.T) {
+	plainBody := "hello gzip request body!"
+	compressedBody := gzipCompress([]byte(plainBody))
+
+	httpMessage := buildHTTPRequest("POST", "/upload", map[string]string{
+		"Host":             "example.com",
+		"Content-Type":     "application/octet-stream",
+		"Content-Encoding": "gzip",
+		"Content-Length":   fmt.Sprintf("%d", len(compressedBody)),
+	}, compressedBody)
+
+	parser := protocol.HTTPStreamParser{}
+	result := parser.ParseRequest(httpMessage, protocol.Request, 10, 20)
+
+	assert.Equal(t, protocol.Success, result.ParseState)
+	assert.Equal(t, 1, len(result.ParsedMessages))
+
+	req := result.ParsedMessages[0]
+	formatted := req.FormatToString()
+	assert.Contains(t, formatted, plainBody, "decompressed request body should be present in output")
+	assert.Contains(t, formatted, "Content-Encoding: gzip", "original headers should be preserved")
+}
+
 func TestParseResponse_GzipBody(t *testing.T) {
 	plainBody := "hello gzip world!"
 	compressedBody := gzipCompress([]byte(plainBody))
