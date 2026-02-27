@@ -6,6 +6,7 @@ import (
 	"kyanos/agent/buffer"
 	ac "kyanos/agent/common"
 	"kyanos/agent/protocol"
+	_ "kyanos/agent/protocol/grpc"
 	_ "kyanos/agent/protocol/mysql"
 	"kyanos/bpf"
 	"kyanos/common"

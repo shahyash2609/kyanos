@@ -373,6 +373,40 @@ static __inline enum message_type_t is_dns_protocol(const char* buf, size_t coun
   return (qr == 0) ? kRequest : kResponse;
 }
 
+// HTTP/2: client sends connection preface "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes).
+// Server responds with SETTINGS frame (9-byte header: 3-byte length, 1 type=0x4, 1 flags, 4 stream id=0).
+static __always_inline enum message_type_t is_http2_protocol(const char *buf, size_t count) {
+  // Client preface
+  static const char preface[24] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+  if (count >= 24) {
+    char buf24[24];
+    bpf_probe_read_user(buf24, 24, buf);
+    if (buf24[0] == preface[0] && buf24[1] == preface[1] && buf24[2] == preface[2] &&
+        buf24[3] == preface[3] && buf24[4] == preface[4] && buf24[5] == preface[5] &&
+        buf24[6] == preface[6] && buf24[7] == preface[7] && buf24[8] == preface[8] &&
+        buf24[9] == preface[9] && buf24[10] == preface[10] && buf24[11] == preface[11] &&
+        buf24[12] == preface[12] && buf24[13] == preface[13] && buf24[14] == preface[14] &&
+        buf24[15] == preface[15] && buf24[16] == preface[16] && buf24[17] == preface[17] &&
+        buf24[18] == preface[18] && buf24[19] == preface[19] && buf24[20] == preface[20] &&
+        buf24[21] == preface[21] && buf24[22] == preface[22] && buf24[23] == preface[23]) {
+      return kRequest;
+    }
+  }
+  // Server: SETTINGS frame (type 0x4) on stream 0
+  if (count >= 9) {
+    char hdr[9];
+    bpf_probe_read_user(hdr, 9, buf);
+    uint32_t length = ((unsigned char)hdr[0] << 16) | ((unsigned char)hdr[1] << 8) | (unsigned char)hdr[2];
+    uint8_t frame_type = (unsigned char)hdr[3];
+    uint32_t stream_id = ((unsigned char)hdr[5] << 24) | ((unsigned char)hdr[6] << 16) |
+                         ((unsigned char)hdr[7] << 8) | (unsigned char)hdr[8];
+    if (length <= 16384 && frame_type == 4 && stream_id == 0) {
+      return kResponse;
+    }
+  }
+  return kUnknown;
+}
+
 #define TRACE_PROTOCOL(p) (trace_protocol == kProtocolUnset || trace_protocol == p)
 
 static __always_inline struct protocol_message_t infer_protocol(const char *buf, size_t count, 
@@ -396,6 +430,8 @@ static __always_inline struct protocol_message_t infer_protocol(const char *buf,
     protocol_message.protocol = kProtocolDNS;
   } else if (TRACE_PROTOCOL(kProtocolRedis) && is_redis_protocol(buf, count)) {
     protocol_message.protocol = kProtocolRedis;
+  } else if (TRACE_PROTOCOL(kProtocolHTTP2) && (protocol_message.type = is_http2_protocol(buf, count)) != kUnknown) {
+    protocol_message.protocol = kProtocolHTTP2;
   }
   conn_info->prev_count = count;
   if (count == 4) {

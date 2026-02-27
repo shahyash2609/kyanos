@@ -5,10 +5,11 @@ import (
 )
 
 var ProtocolNamesMap = map[AgentTrafficProtocolT]string{
-	AgentTrafficProtocolTKProtocolHTTP:  "HTTP",
-	AgentTrafficProtocolTKProtocolRedis: "Redis",
-	AgentTrafficProtocolTKProtocolMySQL: "MySQL",
-	AgentTrafficProtocolTKProtocolMongo: "Mongo",
+	AgentTrafficProtocolTKProtocolHTTP:     "HTTP",
+	AgentTrafficProtocolTKProtocolHTTP2:    "gRPC",
+	AgentTrafficProtocolTKProtocolRedis:    "Redis",
+	AgentTrafficProtocolTKProtocolMySQL:    "MySQL",
+	AgentTrafficProtocolTKProtocolMongo:    "Mongo",
 	AgentTrafficProtocolTKProtocolRocketMQ: "RocketMQ",
 	AgentTrafficProtocolTKProtocolKafka:    "Kafka",
 }

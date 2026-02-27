@@ -7,7 +7,7 @@ import (
 )
 
 var maxRecords int
-var supportedProtocols = []string{"http", "redis", "mysql", "rocketmq", "kafka", "mongodb", "dns"}
+var supportedProtocols = []string{"http", "grpc", "redis", "mysql", "rocketmq", "kafka", "mongodb", "dns"}
 var watchCmd = &cobra.Command{
 	Use: "watch [http|redis|mysql|rocketmq|mongodb|dns] [flags]",
 	Example: `
