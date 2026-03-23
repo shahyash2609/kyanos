@@ -81,8 +81,10 @@ type HeaderField struct {
 
 // GrpcParser parses HTTP/2 frames and gRPC messages.
 type GrpcParser struct {
-	// hpack decoder state for the connection (must process HEADERS in order)
-	hpackDecoder *hpackDecoder
+	// HTTP/2 has separate HPACK compression contexts per direction (RFC 7541 §2.2).
+	// reqHpackDecoder decodes client→server HEADERS; respHpackDecoder decodes server→client HEADERS.
+	reqHpackDecoder  *hpackDecoder
+	respHpackDecoder *hpackDecoder
 	// partial state per stream until END_STREAM
 	streams map[uint32]*streamState
 }
@@ -110,7 +112,10 @@ func (p *GrpcParser) initStreams() {
 	if p.streams == nil {
 		p.streams = make(map[uint32]*streamState)
 	}
-	if p.hpackDecoder == nil {
-		p.hpackDecoder = newHpackDecoder()
+	if p.reqHpackDecoder == nil {
+		p.reqHpackDecoder = newHpackDecoder()
+	}
+	if p.respHpackDecoder == nil {
+		p.respHpackDecoder = newHpackDecoder()
 	}
 }

@@ -87,7 +87,7 @@ func (p *GrpcParser) ParseStream(streamBuffer *buffer.StreamBuffer, messageType 
 			if messageType == protocol.Response {
 				ss.responseHeaderBlock = append(ss.responseHeaderBlock, payload...)
 				if hdr.Flags&FlagEndHeaders != 0 {
-					decoded, err := p.hpackDecoder.Decode(ss.responseHeaderBlock)
+					decoded, err := p.respHpackDecoder.Decode(ss.responseHeaderBlock)
 					if err == nil {
 						ss.responseHeaders = decoded
 						for _, f := range decoded {
@@ -102,7 +102,7 @@ func (p *GrpcParser) ParseStream(streamBuffer *buffer.StreamBuffer, messageType 
 			} else {
 				ss.headerBlock = append(ss.headerBlock, payload...)
 				if hdr.Flags&FlagEndHeaders != 0 {
-					decoded, err := p.hpackDecoder.Decode(ss.headerBlock)
+					decoded, err := p.reqHpackDecoder.Decode(ss.headerBlock)
 					if err == nil {
 						ss.headers = decoded
 						for _, f := range decoded {
