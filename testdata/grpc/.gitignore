@@ -1,0 +1,5 @@
+# Generated Python proto stubs — recreate with: bash generate_proto.sh
+hello_pb2.py
+hello_pb2_grpc.py
+__pycache__/
+*.pyc
