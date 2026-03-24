@@ -40,6 +40,14 @@ $(call allow-override,LD,$(CROSS_COMPILE)ld)
 .PHONY: all
 all: $(APPS)
 
+# Convenience target: compile BPF objects then build the Go binary in one step.
+# Usage: make build                    (amd64 host, no BTF archive)
+#        BUILD_ARCH=x86_64 ARCH_BPF_NAME=x86 make build   (with BTF archive)
+.PHONY: build
+build:
+	$(MAKE) build-bpf
+	$(if $(BUILD_ARCH),$(MAKE) btfgen BUILD_ARCH=$(BUILD_ARCH) ARCH_BPF_NAME=$(ARCH_BPF_NAME))
+	$(MAKE) kyanos
 
 clean:
 	$(call msg,CLEAN)
