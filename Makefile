@@ -1,5 +1,11 @@
 V:=1
 OUTPUT := .output
+
+# Docker-based local build (works on macOS without Linux toolchain installed)
+DOCKER_IMAGE    ?= kyanos-builder
+DOCKER_GO_CACHE ?= kyanos-go-cache
+HOST_UID        := $(shell id -u)
+HOST_GID        := $(shell id -g)
 CLANG ?= clang
 LIBBPF_SRC := $(abspath ./libbpf/src)
 BPFTOOL_SRC := $(abspath ./bpftool/src)
@@ -48,6 +54,25 @@ build:
 	$(MAKE) build-bpf
 	$(if $(BUILD_ARCH),$(MAKE) btfgen BUILD_ARCH=$(BUILD_ARCH) ARCH_BPF_NAME=$(ARCH_BPF_NAME))
 	$(MAKE) kyanos
+
+# Build inside a Linux Docker container — works on macOS without any Linux toolchain installed.
+# The kyanos binary is written to the current directory and owned by the calling user.
+# Usage: make docker-build
+.PHONY: docker-build
+docker-build:
+	@if [ ! -f libbpf/src/Makefile ]; then \
+		echo "Initializing git submodules (needed for libbpf build inside container)..."; \
+		git submodule update --init --recursive; \
+	fi
+	docker build --platform linux/amd64 -f Dockerfile.build -t $(DOCKER_IMAGE) .
+	docker run --rm \
+		--platform linux/amd64 \
+		-v "$(CURDIR)":/workspace \
+		-v "$(DOCKER_GO_CACHE)":/root/go \
+		-w /workspace \
+		$(DOCKER_IMAGE) \
+		bash -c "make clean && make build && chown $(HOST_UID):$(HOST_GID) kyanos"
+	@echo "=> ./kyanos is ready"
 
 clean:
 	$(call msg,CLEAN)
