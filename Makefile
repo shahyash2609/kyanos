@@ -69,14 +69,14 @@ build-bpf: $(LIBBPF_OBJ) $(wildcard bpf/*.[ch]) | $(OUTPUT)
 	TARGET=amd64 go generate ./bpf/
 	TARGET=arm64 go generate ./bpf/
 
-kyanos: build-bpf $(GO_FILES)
+kyanos: $(GO_FILES)
 	$(call msg,BINARY,$@)
-	export CGO_LDFLAGS="-Xlinker -rpath=. -static" && go build -o kyanos
+	CGO_ENABLED=1 go build -tags=static -ldflags="-linkmode external -extldflags '-static'" -o kyanos
 
 .PHONY: kyanos-compress
-kyanos-compress: build-bpf $(GO_FILES)
+kyanos-compress: $(GO_FILES)
 	$(call msg,BINARY,$@)
-	export CGO_LDFLAGS="-Xlinker -rpath=. -static" && go build -o kyanos && upx -9 kyanos
+	CGO_ENABLED=1 go build -tags=static -ldflags="-linkmode external -extldflags '-static'" -o kyanos && upx -9 kyanos
 
 
 .PHONY: btfgen
@@ -115,9 +115,9 @@ dlv:
 	chmod +x kyanos && dlv --headless --listen=:2345 --api-version=2 --check-go-version=false exec ./kyanos 
 
 .PHONY: kyanos-debug
-kyanos-debug: build-bpf $(GO_FILES)
+kyanos-debug: $(GO_FILES)
 	$(call msg,BINARY,$@)
-	export CGO_LDFLAGS="-Xlinker -rpath=. -static" && go build -o kyanos -gcflags "all=-N -l"
+	CGO_ENABLED=1 go build -tags=static -ldflags="-linkmode external -extldflags '-static'" -gcflags "all=-N -l" -o kyanos
 
 .PHONY: remote-debug
 remote-debug: build-bpf kyanos-debug dlv
