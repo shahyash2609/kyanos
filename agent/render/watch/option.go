@@ -2,6 +2,7 @@ package watch
 
 import (
 	"strings"
+	"time"
 )
 
 type WatchOptions struct {
@@ -15,6 +16,16 @@ type WatchOptions struct {
 	TraceDevEvent                bool
 	TraceSocketEvent             bool
 	TraceSslEvent                bool
+
+	// GCS rolling-file upload options.
+	// When GCSBucket is non-empty, records are written to a local rolling file
+	// and uploaded to GCS every GCSUploadInterval under:
+	//   gs://{GCSBucket}/{GCSServiceName}/{GCSDeploymentID}/primary/{date}/{ts}.jsonl
+	GCSBucket         string
+	GCSServiceName    string
+	GCSDeploymentID   string
+	GCSUploadInterval time.Duration
+	GCSCredentials    string // path to service-account JSON; empty = Application Default Credentials
 }
 
 func (w *WatchOptions) Init() {
@@ -29,8 +40,11 @@ func (w *WatchOptions) Init() {
 	if w.MaxRecords <= 0 {
 		w.MaxRecords = 100
 	}
+	if w.GCSUploadInterval <= 0 {
+		w.GCSUploadInterval = 3 * time.Minute
+	}
 }
 
 func (w *WatchOptions) UseTui() bool {
-	return !w.DebugOutput && w.JsonOutput == ""
+	return !w.DebugOutput && w.JsonOutput == "" && w.GCSBucket == ""
 }

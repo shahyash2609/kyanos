@@ -566,6 +566,31 @@ func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, option
 				}))
 			}
 		}
+	} else if options.GCSBucket != "" {
+		uploader, err := NewGCSUploader(ctx, options)
+		if err != nil {
+			c.AgentLog.Errorln("Failed to create GCS uploader:", err)
+			return
+		}
+		defer uploader.Flush()
+		c.AgentLog.Infof("GCS rolling upload enabled: gs://%s/%s/%s/primary/ (interval: %s)",
+			options.GCSBucket, options.GCSServiceName, options.GCSDeploymentID,
+			options.GCSUploadInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if err := uploader.Write(append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write record to rolling file:", err)
+				}
+			}
+		}
 	} else if options.JsonOutput != "" {
 		var jsonFile *os.File
 		var err error

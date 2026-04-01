@@ -52,6 +52,14 @@ func init() {
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceDevEvent, "trace-dev-event", true, "Collect dev layer events to measure network interface time spent.")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceSocketEvent, "trace-socket-event", false, "Collect socket layer events to measure the time spent on socket data copying.")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceSslEvent, "trace-ssl-event", true, "Collect SSL events to trace SSL connection data.")
+
+	// GCS rolling-file upload flags.
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSBucket, "gcs-bucket", "", "GCS bucket name for rolling-file upload (enables GCS mode)")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSServiceName, "gcs-service-name", "", "Service name used in GCS path: {service}/{deployment}/primary/")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSDeploymentID, "gcs-deployment-id", "", "Deployment ID used in GCS path: {service}/{deployment}/primary/")
+	watchCmd.PersistentFlags().DurationVar(&options.WatchOptions.GCSUploadInterval, "gcs-upload-interval", 0, "How often to roll and upload to GCS (default 3m)")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSCredentials, "gcs-credentials", "", "Path to GCS service-account JSON key file (uses Application Default Credentials if omitted)")
+
 	watchCmd.Flags().SortFlags = false
 	watchCmd.PersistentFlags().SortFlags = false
 	rootCmd.AddCommand(watchCmd)
