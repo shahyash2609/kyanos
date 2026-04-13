@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyanos
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kyanos-debug
+  namespace: kyanos
+  labels:
+    app: kyanos-debug
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: gke-k8s-central-stg--np-cntr-xcntr-sp-7bd87fcc-vwzn
+  hostPID: true
+  hostNetwork: true
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: debug
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: sys-kernel
+          mountPath: /sys/kernel
+        - name: sys-fs-bpf
+          mountPath: /sys/fs/bpf
+        - name: proc-host
+          mountPath: /host/proc
+          readOnly: true
+        - name: run-containerd
+          mountPath: /run/containerd
+          readOnly: true
+        - name: etc-cni
+          mountPath: /etc/cni
+          readOnly: true
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+  volumes:
+    - name: sys-kernel
+      hostPath:
+        path: /sys/kernel
+    - name: sys-fs-bpf
+      hostPath:
+        path: /sys/fs/bpf
+    - name: proc-host
+      hostPath:
+        path: /proc
+    - name: run-containerd
+      hostPath:
+        path: /run/containerd
+    - name: etc-cni
+      hostPath:
+        path: /etc/cni
