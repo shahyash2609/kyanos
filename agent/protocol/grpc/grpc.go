@@ -79,6 +79,10 @@ type HeaderField struct {
 	Value string
 }
 
+// DefaultReflection is set from the CLI when --reflect is provided.
+// The parser factory picks it up when creating new GrpcParser instances.
+var DefaultReflection *ReflectionResolver
+
 // GrpcParser parses HTTP/2 frames and gRPC messages.
 type GrpcParser struct {
 	// HTTP/2 has separate HPACK compression contexts per direction (RFC 7541 §2.2).
@@ -87,6 +91,10 @@ type GrpcParser struct {
 	respHpackDecoder *hpackDecoder
 	// partial state per stream until END_STREAM
 	streams map[uint32]*streamState
+	// streamPaths caches streamID→path from request parsing for response decoding
+	streamPaths map[uint32]string
+	// Reflection resolver for decoding protobuf messages (nil if not enabled)
+	Reflection *ReflectionResolver
 }
 
 type streamState struct {
@@ -112,10 +120,16 @@ func (p *GrpcParser) initStreams() {
 	if p.streams == nil {
 		p.streams = make(map[uint32]*streamState)
 	}
+	if p.streamPaths == nil {
+		p.streamPaths = make(map[uint32]string)
+	}
 	if p.reqHpackDecoder == nil {
 		p.reqHpackDecoder = newHpackDecoder()
 	}
 	if p.respHpackDecoder == nil {
 		p.respHpackDecoder = newHpackDecoder()
+	}
+	if p.Reflection == nil && DefaultReflection != nil {
+		p.Reflection = DefaultReflection
 	}
 }

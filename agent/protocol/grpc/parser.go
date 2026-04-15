@@ -213,7 +213,17 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 	var buf []byte
 	// Request: only when we're parsing request buffer and this stream is client-initiated
 	if ss.isRequest && messageType == protocol.Request {
-		buf = buildRequestDisplay(path, method, authority, ss.headers, body)
+		// Cache path for response-side reflection decoding
+		if path != "/" {
+			p.streamPaths[streamID] = path
+		}
+		displayBody := body
+		if p.Reflection != nil && len(body) > 0 {
+			if decoded, ok := p.Reflection.DecodeRequest(path, body); ok {
+				displayBody = []byte(decoded)
+			}
+		}
+		buf = buildRequestDisplay(path, method, authority, ss.headers, displayBody)
 		return &ParsedGrpcRequest{
 			FrameBase: fb,
 			Path:      path,
@@ -230,7 +240,21 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 		if len(respBody) > 0 {
 			respBody = decodeGrpcBody(respBody, ss.responseGrpcEncoding)
 		}
-		buf = buildResponseDisplay(ss.responseHeaders, respBody)
+		displayBody := respBody
+		if p.Reflection != nil && len(respBody) > 0 {
+			// Use cached path from request parsing for reflection lookup
+			reflectPath := path
+			if reflectPath == "/" {
+				if cached, ok := p.streamPaths[streamID]; ok {
+					reflectPath = cached
+				}
+			}
+			if decoded, ok := p.Reflection.DecodeResponse(reflectPath, respBody); ok {
+				displayBody = []byte(decoded)
+			}
+			delete(p.streamPaths, streamID)
+		}
+		buf = buildResponseDisplay(ss.responseHeaders, displayBody)
 		return &ParsedGrpcResponse{
 			FrameBase: fb,
 			buf:       buf,

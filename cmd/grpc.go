@@ -7,6 +7,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func initGrpcReflection(cmd *cobra.Command) {
+	reflectTarget, _ := cmd.Flags().GetString("reflect")
+	if reflectTarget == "" {
+		return
+	}
+	resolver := grpc.NewReflectionResolver(reflectTarget)
+	if err := resolver.Resolve(); err != nil {
+		logger.Warnf("gRPC reflection failed for %s: %v (protobuf bodies will be raw bytes)", reflectTarget, err)
+		return
+	}
+	grpc.DefaultReflection = resolver
+}
+
 var grpcCmd = &cobra.Command{
 	Use:   "grpc [--method METHODS|--path PATH|--path-regex REGEX|--path-prefix PREFIX|--host HOSTNAME|--header HEADER:VALUE]",
 	Short: "watch gRPC (HTTP/2) messages",
@@ -52,6 +65,7 @@ var grpcCmd = &cobra.Command{
 		}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
+		initGrpcReflection(cmd)
 		startAgent()
 	},
 }
@@ -63,6 +77,7 @@ func init() {
 	grpcCmd.Flags().String("path-regex", "", "Specify the regex for gRPC path")
 	grpcCmd.Flags().String("path-prefix", "", "Specify the prefix of gRPC path to monitor")
 	grpcCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value). Can be repeated. Example: --header 'Authorization: Bearer x'")
+	grpcCmd.Flags().String("reflect", "", "gRPC server address (host:port) for server reflection to decode protobuf bodies")
 
 	grpcCmd.Flags().SortFlags = false
 	grpcCmd.PersistentFlags().SortFlags = false
