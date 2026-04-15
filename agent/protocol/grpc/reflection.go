@@ -194,25 +194,68 @@ func (r *ReflectionResolver) fetchFileDependency(stream rpb.ServerReflection_Ser
 }
 
 // DecodeRequest decodes a protobuf request body for the given gRPC path.
+// If the path is unknown (e.g. "/" on mid-stream capture), it tries all methods.
 func (r *ReflectionResolver) DecodeRequest(path string, body []byte) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	md, ok := r.methods[path]
-	if !ok {
-		return "", false
+	if md, ok := r.methods[path]; ok {
+		return decodeDynamic(md.InputType, body)
 	}
-	return decodeDynamic(md.InputType, body)
+	// Path unknown — try all methods (best-effort for mid-stream captures)
+	return r.tryAllMethods(body, true)
 }
 
 // DecodeResponse decodes a protobuf response body for the given gRPC path.
+// If the path is unknown, it tries all methods.
 func (r *ReflectionResolver) DecodeResponse(path string, body []byte) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	md, ok := r.methods[path]
-	if !ok {
-		return "", false
+	if md, ok := r.methods[path]; ok {
+		return decodeDynamic(md.OutputType, body)
 	}
-	return decodeDynamic(md.OutputType, body)
+	// Path unknown — try all methods
+	return r.tryAllMethods(body, false)
+}
+
+// tryAllMethods attempts to decode the body against all known method descriptors.
+// It picks the decode that produces the most populated fields (best match heuristic).
+func (r *ReflectionResolver) tryAllMethods(body []byte, isRequest bool) (string, bool) {
+	var bestResult string
+	var bestScore int
+	for path, md := range r.methods {
+		var msgDesc protoreflect.MessageDescriptor
+		if isRequest {
+			msgDesc = md.InputType
+		} else {
+			msgDesc = md.OutputType
+		}
+		msg := dynamicpb.NewMessage(msgDesc)
+		if err := proto.Unmarshal(body, msg); err != nil {
+			continue
+		}
+		// Score by number of fields that are set
+		score := countSetFields(msg)
+		if score > bestScore {
+			bestScore = score
+			bestResult = formatMessage(msg, msgDesc, 0)
+			// Prefix with method path for context
+			bestResult = fmt.Sprintf("# %s\n%s", path, bestResult)
+		}
+	}
+	if bestScore > 0 {
+		return bestResult, true
+	}
+	return "", false
+}
+
+// countSetFields returns how many fields are populated in the message.
+func countSetFields(msg *dynamicpb.Message) int {
+	count := 0
+	msg.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		count++
+		return true
+	})
+	return count
 }
 
 func decodeDynamic(msgDesc protoreflect.MessageDescriptor, data []byte) (string, bool) {
