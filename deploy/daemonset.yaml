@@ -33,14 +33,8 @@ spec:
             - "X-B3-Sampled: 1"
             - --side
             - server
-            - --gcs-bucket
-            - GCS_BUCKET_PLACEHOLDER
-            - --gcs-service-name
-            - stg-edge-proxy
-            - --gcs-deployment-id
-            - stg-central
-            - --gcs-upload-interval
-            - 3m
+            - --json-output
+            - /data/kyanos-capture.jsonl
           securityContext:
             privileged: true
           volumeMounts:
@@ -55,6 +49,8 @@ spec:
             - name: run-containerd
               mountPath: /run/containerd
               readOnly: true
+            - name: data
+              mountPath: /data
           resources:
             requests:
               cpu: 100m
@@ -75,6 +71,9 @@ spec:
         - name: run-containerd
           hostPath:
             path: /run/containerd
+        - name: data
+          emptyDir:
+            sizeLimit: 5Gi
 ---
 apiVersion: v1
 kind: Namespace

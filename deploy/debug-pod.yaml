@@ -13,6 +13,7 @@ metadata:
 spec:
   nodeSelector:
     kubernetes.io/hostname: gke-k8s-central-stg--np-cntr-xcntr-sp-7bd87fcc-vwzn
+  schedulerName: default-scheduler
   hostPID: true
   hostNetwork: true
   tolerations:
@@ -37,6 +38,8 @@ spec:
         - name: etc-cni
           mountPath: /etc/cni
           readOnly: true
+        - name: data
+          mountPath: /data
       resources:
         requests:
           cpu: 200m
@@ -60,3 +63,6 @@ spec:
     - name: etc-cni
       hostPath:
         path: /etc/cni
+    - name: data
+      emptyDir:
+        sizeLimit: 5Gi
