@@ -212,6 +212,15 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 		body = decodeGrpcBody(body, ss.grpcEncoding)
 	}
 
+	// Resolve reflection: use cached p.Reflection; if nil, try registry by authority.
+	reflection := p.Reflection
+	if reflection == nil && p.Registry != nil && authority != "" {
+		reflection = p.Registry.Get(authority)
+		if reflection != nil {
+			p.Reflection = reflection // cache for subsequent frames on this connection
+		}
+	}
+
 	var buf []byte
 	// Request: only when we're parsing request buffer and this stream is client-initiated
 	if ss.isRequest && messageType == protocol.Request {
@@ -220,8 +229,8 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 			p.streamPaths[streamID] = path
 		}
 		displayBody := body
-		if p.Reflection != nil && len(body) > 0 {
-			if decoded, ok := p.Reflection.DecodeRequest(path, body); ok {
+		if reflection != nil && len(body) > 0 {
+			if decoded, ok := reflection.DecodeRequest(path, body); ok {
 				displayBody = []byte(decoded)
 			}
 		}
@@ -243,7 +252,7 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 			respBody = decodeGrpcBody(respBody, ss.responseGrpcEncoding)
 		}
 		displayBody := respBody
-		if p.Reflection != nil && len(respBody) > 0 {
+		if reflection != nil && len(respBody) > 0 {
 			// Use cached path from request parsing for reflection lookup
 			reflectPath := path
 			if reflectPath == "/" {
@@ -251,7 +260,7 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 					reflectPath = cached
 				}
 			}
-			if decoded, ok := p.Reflection.DecodeResponse(reflectPath, respBody); ok {
+			if decoded, ok := reflection.DecodeResponse(reflectPath, respBody); ok {
 				displayBody = []byte(decoded)
 			}
 			delete(p.streamPaths, streamID)

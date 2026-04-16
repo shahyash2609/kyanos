@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"kyanos/common"
+	"net"
 	"sync"
 	"time"
 
@@ -265,6 +266,45 @@ func decodeDynamic(msgDesc protoreflect.MessageDescriptor, data []byte) (string,
 	}
 	// Use prototext for human-readable output
 	return formatMessage(msg, msgDesc, 0), true
+}
+
+// ReflectionRegistry maps "host:port" or ":port" keys to per-target resolvers.
+// It is populated at startup by the node scanner when --auto-reflect is used.
+type ReflectionRegistry struct {
+	mu        sync.RWMutex
+	resolvers map[string]*ReflectionResolver
+}
+
+// DefaultRegistry is set from node_scanner when --auto-reflect is provided.
+var DefaultRegistry *ReflectionRegistry
+
+// NewReflectionRegistry creates an empty registry.
+func NewReflectionRegistry() *ReflectionRegistry {
+	return &ReflectionRegistry{resolvers: make(map[string]*ReflectionResolver)}
+}
+
+// Register adds or replaces the resolver for the given key (":port" or "host:port").
+func (r *ReflectionRegistry) Register(key string, res *ReflectionResolver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolvers[key] = res
+}
+
+// Get returns the resolver for the given authority ("host:port").
+// Falls back to a ":port"-only match if no exact entry exists.
+func (r *ReflectionRegistry) Get(authority string) *ReflectionResolver {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if res, ok := r.resolvers[authority]; ok {
+		return res
+	}
+	_, port, err := net.SplitHostPort(authority)
+	if err == nil {
+		if res, ok := r.resolvers[":"+port]; ok {
+			return res
+		}
+	}
+	return nil
 }
 
 // buildFileRegistry creates a *protoregistry.Files from a map of FileDescriptorProtos.

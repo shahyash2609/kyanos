@@ -1,20 +1,55 @@
 package cmd
 
 import (
+	"fmt"
+	"kyanos/agent/metadata"
 	"kyanos/agent/protocol/grpc"
+	"kyanos/common"
 	"regexp"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
 
-func initGrpcReflection(cmd *cobra.Command) {
-	reflectTarget, _ := cmd.Flags().GetString("reflect")
-	if reflectTarget == "" {
+// initAutoReflect discovers all listening ports on this node and probes each for
+// gRPC server reflection. Successful resolvers are registered in grpc.DefaultRegistry.
+// Probing runs concurrently; the function returns once all goroutines complete.
+func initAutoReflect() {
+	ports := metadata.DiscoverListeningPorts()
+	if len(ports) == 0 {
+		common.AgentLog.Infoln("auto-reflect: no non-system listening ports found")
 		return
 	}
-	resolver := grpc.NewReflectionResolver(reflectTarget)
+	common.AgentLog.Infof("auto-reflect: probing %d port(s) for gRPC reflection", len(ports))
+	registry := grpc.NewReflectionRegistry()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, port := range ports {
+		port := port
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			target := fmt.Sprintf("localhost:%d", port)
+			resolver := grpc.NewReflectionResolver(target)
+			if err := resolver.Resolve(); err != nil {
+				common.AgentLog.Debugf("auto-reflect: port %d not gRPC or reflection unavailable: %v", port, err)
+				return
+			}
+			key := fmt.Sprintf(":%d", port)
+			common.AgentLog.Infof("auto-reflect: registered reflection for port %d", port)
+			mu.Lock()
+			registry.Register(key, resolver)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	grpc.DefaultRegistry = registry
+}
+
+func initGrpcReflectionForTarget(target string) {
+	resolver := grpc.NewReflectionResolver(target)
 	if err := resolver.Resolve(); err != nil {
-		logger.Warnf("gRPC reflection failed for %s: %v (protobuf bodies will be raw bytes)", reflectTarget, err)
+		logger.Warnf("gRPC reflection failed for %s: %v (protobuf bodies will be raw bytes)", target, err)
 		return
 	}
 	grpc.DefaultReflection = resolver
@@ -65,19 +100,20 @@ var grpcCmd = &cobra.Command{
 		}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		initGrpcReflection(cmd)
 		startAgent()
 	},
 }
 
 func init() {
+	autoReflectFunc = initAutoReflect
+	reflectTargetFunc = initGrpcReflectionForTarget
+
 	grpcCmd.Flags().StringSlice("method", []string{}, "Specify the HTTP method to monitor (e.g. POST for gRPC)")
 	grpcCmd.Flags().String("host", "", "Specify the :authority to monitor, like: 'localhost:50051'")
 	grpcCmd.Flags().String("path", "", "Specify the gRPC path (e.g. /package.Service/Method)")
 	grpcCmd.Flags().String("path-regex", "", "Specify the regex for gRPC path")
 	grpcCmd.Flags().String("path-prefix", "", "Specify the prefix of gRPC path to monitor")
 	grpcCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value). Can be repeated. Example: --header 'Authorization: Bearer x'")
-	grpcCmd.Flags().String("reflect", "", "gRPC server address (host:port) for server reflection to decode protobuf bodies")
 
 	grpcCmd.Flags().SortFlags = false
 	grpcCmd.PersistentFlags().SortFlags = false

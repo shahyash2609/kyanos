@@ -11,6 +11,8 @@ type WatchOptions struct {
 	Opts                         string
 	DebugOutput                  bool
 	JsonOutput                   string
+	JsonOutputDir                string // per-pod JSONL output directory (writes <dir>/<pod_name>.jsonl)
+	AutoReflect                  bool   // auto-discover listening ports and probe gRPC reflection
 	MaxRecordContentDisplayBytes int
 	MaxRecords                   int
 	TraceDevEvent                bool
@@ -46,5 +48,5 @@ func (w *WatchOptions) Init() {
 }
 
 func (w *WatchOptions) UseTui() bool {
-	return !w.DebugOutput && w.JsonOutput == "" && w.GCSBucket == ""
+	return !w.DebugOutput && w.JsonOutput == "" && w.GCSBucket == "" && w.JsonOutputDir == ""
 }

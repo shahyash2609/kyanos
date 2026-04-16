@@ -11,6 +11,7 @@ import (
 	"kyanos/bpf"
 	c "kyanos/common"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -588,6 +589,54 @@ func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, option
 				}
 				if err := uploader.Write(append(jsonData, '\n')); err != nil {
 					c.AgentLog.Errorln("Failed to write record to rolling file:", err)
+				}
+			}
+		}
+	} else if options.JsonOutputDir != "" {
+		if err := os.MkdirAll(options.JsonOutputDir, 0755); err != nil {
+			c.AgentLog.Errorln("Failed to create json-output-dir:", err)
+			return
+		}
+		files := make(map[string]*os.File)
+		defer func() {
+			for _, f := range files {
+				f.Close()
+			}
+		}()
+		getOrOpenFile := func(podName string) *os.File {
+			if f, ok := files[podName]; ok {
+				return f
+			}
+			name := podName
+			if name == "" {
+				name = "unknown"
+			}
+			fpath := filepath.Join(options.JsonOutputDir, name+".jsonl")
+			f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				c.AgentLog.Errorln("Failed to open pod output file:", err)
+				return nil
+			}
+			c.AgentLog.Infof("Per-pod output: writing to %s", fpath)
+			files[podName] = f
+			return f
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				f := getOrOpenFile(r.ConnDesc.PodName)
+				if f == nil {
+					continue
+				}
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if _, err := f.Write(append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write JSON to pod file:", err)
 				}
 			}
 		}

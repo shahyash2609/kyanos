@@ -95,6 +95,8 @@ type GrpcParser struct {
 	streamPaths map[uint32]string
 	// Reflection resolver for decoding protobuf messages (nil if not enabled)
 	Reflection *ReflectionResolver
+	// Registry for per-authority resolver lookup (populated by --auto-reflect node scan)
+	Registry *ReflectionRegistry
 }
 
 type streamState struct {
@@ -131,5 +133,8 @@ func (p *GrpcParser) initStreams() {
 	}
 	if p.Reflection == nil && DefaultReflection != nil {
 		p.Reflection = DefaultReflection
+	}
+	if p.Registry == nil && DefaultRegistry != nil {
+		p.Registry = DefaultRegistry
 	}
 }
