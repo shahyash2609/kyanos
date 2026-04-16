@@ -213,9 +213,15 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 	}
 
 	// Resolve reflection: use cached p.Reflection; if nil, try registry by authority.
+	// Fall back to the sole registered resolver when authority is empty (pre-existing
+	// connections where the HEADERS frame was missed before kyanos attached).
 	reflection := p.Reflection
-	if reflection == nil && p.Registry != nil && authority != "" {
-		reflection = p.Registry.Get(authority)
+	if reflection == nil && p.Registry != nil {
+		if authority != "" {
+			reflection = p.Registry.Get(authority)
+		} else {
+			reflection = p.Registry.GetSole()
+		}
 		if reflection != nil {
 			p.Reflection = reflection // cache for subsequent frames on this connection
 		}

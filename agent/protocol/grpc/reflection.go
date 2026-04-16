@@ -307,6 +307,19 @@ func (r *ReflectionRegistry) Get(authority string) *ReflectionResolver {
 	return nil
 }
 
+// GetSole returns the single registered resolver when exactly one exists, nil otherwise.
+// Used as a fallback when the :authority header is missing (pre-existing connections).
+func (r *ReflectionRegistry) GetSole() *ReflectionResolver {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.resolvers) == 1 {
+		for _, res := range r.resolvers {
+			return res
+		}
+	}
+	return nil
+}
+
 // buildFileRegistry creates a *protoregistry.Files from a map of FileDescriptorProtos.
 func buildFileRegistry(fdMap map[string]*descriptorpb.FileDescriptorProto) (*protoregistry.Files, error) {
 	fds := &descriptorpb.FileDescriptorSet{}
