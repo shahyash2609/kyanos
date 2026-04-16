@@ -205,8 +205,10 @@ func (p *GrpcParser) buildMessage(streamID uint32, ss *streamState, ts, seq uint
 	}
 
 	body := ss.body
-	// gRPC length-prefixed messages; decompress if grpc-encoding: gzip
-	if ss.contentType == "application/grpc" && len(body) > 0 {
+	// gRPC length-prefixed messages; decompress if grpc-encoding: gzip.
+	// Always attempt to strip the 5-byte gRPC frame header even when contentType
+	// is unknown (pre-existing connections where HEADERS were missed via HPACK).
+	if len(body) > 0 {
 		body = decodeGrpcBody(body, ss.grpcEncoding)
 	}
 
