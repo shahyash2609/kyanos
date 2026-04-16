@@ -11,32 +11,41 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// initAutoReflect discovers all listening ports on this node and probes each for
-// gRPC server reflection. Successful resolvers are registered in grpc.DefaultRegistry.
-// Probing runs concurrently; the function returns once all goroutines complete.
+// initAutoReflect discovers pod endpoints via CRI and probes each for gRPC server
+// reflection. Falls back to host-level port scan if CRI is unavailable.
+// Successful resolvers are registered in grpc.DefaultRegistry keyed by ":port".
 func initAutoReflect() {
-	ports := metadata.DiscoverListeningPorts()
-	if len(ports) == 0 {
-		common.AgentLog.Infoln("auto-reflect: no non-system listening ports found")
-		return
+	// Try CRI-based pod endpoint discovery first.
+	endpoints := metadata.DiscoverPodEndpoints(options.CriRuntimeEndpoint, options.ContainerdEndpoint)
+	if len(endpoints) == 0 {
+		// Fallback: host network namespace ports (works for host-network pods).
+		ports := metadata.DiscoverListeningPorts()
+		if len(ports) == 0 {
+			common.AgentLog.Infoln("auto-reflect: no listening ports found")
+			return
+		}
+		for _, p := range ports {
+			endpoints = append(endpoints, metadata.PodEndpoint{IP: "localhost", Port: p})
+		}
 	}
-	common.AgentLog.Infof("auto-reflect: probing %d port(s) for gRPC reflection", len(ports))
+
+	common.AgentLog.Infof("auto-reflect: probing %d endpoint(s) for gRPC reflection", len(endpoints))
 	registry := grpc.NewReflectionRegistry()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	for _, port := range ports {
-		port := port
+	for _, ep := range endpoints {
+		ep := ep
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			target := fmt.Sprintf("localhost:%d", port)
+			target := fmt.Sprintf("%s:%d", ep.IP, ep.Port)
 			resolver := grpc.NewReflectionResolver(target)
 			if err := resolver.Resolve(); err != nil {
-				common.AgentLog.Debugf("auto-reflect: port %d not gRPC or reflection unavailable: %v", port, err)
+				common.AgentLog.Debugf("auto-reflect: %s not gRPC or reflection unavailable: %v", target, err)
 				return
 			}
-			key := fmt.Sprintf(":%d", port)
-			common.AgentLog.Infof("auto-reflect: registered reflection for port %d", port)
+			key := fmt.Sprintf(":%d", ep.Port)
+			common.AgentLog.Infof("auto-reflect: registered reflection for %s (key=%s)", target, key)
 			mu.Lock()
 			registry.Register(key, resolver)
 			mu.Unlock()
