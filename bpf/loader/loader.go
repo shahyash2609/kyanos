@@ -364,12 +364,26 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 		cc, filterResult, err := applyContainerFilter(ctx, options)
 		if err == nil {
 			options.Cc = cc
+			if ac.Options != nil {
+				ac.Options.Cc = cc
+			}
 			writeFilterNsIdsToMap(filterResult, bpf.Objs)
 			one := int64(1)
 			controlValues.Update(bpf.AgentControlValueIndexTKEnableFilterByPid, one, ebpf.UpdateAny)
 		} else {
 			common.AgentLog.Errorf("applyContainerFilter failed: %v", err)
 			return false
+		}
+	} else {
+		// Always initialize the container cache for pod-name resolution in
+		// per-pod output modes, even when not filtering by container.
+		cc, _, _ := metadata.NewContainerCache(ctx, options.DockerEndpoint, options.ContainerdEndpoint, options.CriRuntimeEndpoint)
+		if cc != nil {
+			options.Cc = cc
+			if ac.Options != nil {
+				ac.Options.Cc = cc
+			}
+			common.AgentLog.Infof("container cache initialized for pod-name resolution")
 		}
 	}
 

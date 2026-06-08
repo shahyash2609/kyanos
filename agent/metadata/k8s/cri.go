@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cri "k8s.io/cri-api/pkg/apis"
+	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubernetes/pkg/kubelet/cri/remote"
 )
 
@@ -74,6 +75,35 @@ func (m *MetaData) GetPodByName(ctx context.Context, name, namespace string) (p 
 		break
 	}
 	return p
+}
+
+// PodIPMap returns a map of "namespace/name" -> primary IP for all READY pod sandboxes.
+func (m *MetaData) PodIPMap() map[string]string {
+	if m.res == nil {
+		return nil
+	}
+	sandboxes, err := m.res.ListPodSandbox(nil)
+	if err != nil {
+		common.AgentLog.Debugf("auto-reflect: list pod sandbox failed: %v", err)
+		return nil
+	}
+	result := make(map[string]string)
+	for _, sb := range sandboxes {
+		if sb.State != runtimeapi.PodSandboxState_SANDBOX_READY {
+			continue
+		}
+		resp, err := m.res.PodSandboxStatus(sb.Id, false)
+		if err != nil || resp.Status == nil || resp.Status.Network == nil {
+			continue
+		}
+		ip := resp.Status.Network.Ip
+		if ip == "" {
+			continue
+		}
+		key := sb.Metadata.Namespace + "/" + sb.Metadata.Name
+		result[key] = ip
+	}
+	return result
 }
 
 func tidyLabels(raw map[string]string) map[string]string {

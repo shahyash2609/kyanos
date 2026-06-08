@@ -161,6 +161,35 @@ func (d *MetaData) GetByNetNs(netNs int64) types.Container {
 	return types.Container{}
 }
 
+func (d *MetaData) GetByPidNs(pidNs int64) types.Container {
+	if pidNs == 0 || pidNs == d.hostPidNs {
+		return types.Container{}
+	}
+
+	d.mux.RLock()
+	defer d.mux.RUnlock()
+
+	var containers []types.Container
+	for _, c := range d.containerById {
+		if c.PidNamespace > 0 && c.PidNamespace == d.hostPidNs {
+			continue
+		}
+		if c.PidNamespace > 0 && c.PidNamespace == pidNs {
+			containers = append(containers, c)
+		}
+	}
+	if len(containers) == 1 {
+		return containers[0]
+	}
+	for _, c := range containers {
+		if !c.IsSandbox() {
+			return c
+		}
+	}
+
+	return types.Container{}
+}
+
 func (d *MetaData) GetByMntNs(mntNs int64) types.Container {
 	if mntNs == 0 || mntNs == d.hostMntNs {
 		return types.Container{}

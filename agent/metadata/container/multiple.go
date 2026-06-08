@@ -67,6 +67,16 @@ func (m *MultipleEngineMetaData) GetByMntNs(mntNs int64) types.Container {
 	}
 	return c
 }
+func (m *MultipleEngineMetaData) GetByPidNs(pidNs int64) types.Container {
+	var c types.Container
+	for _, e := range m.engines {
+		c = e.GetByPidNs(pidNs)
+		if c.Id != "" {
+			return c
+		}
+	}
+	return c
+}
 func (m *MultipleEngineMetaData) GetByNetNs(netNs int64) types.Container {
 	var c types.Container
 	for _, e := range m.engines {

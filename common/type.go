@@ -29,6 +29,7 @@ type ConnDesc struct {
 	Side       SideEnum
 	StreamId   int
 	IsSsl      bool
+	PodName    string
 }
 
 func (c *ConnDesc) Identity() string {

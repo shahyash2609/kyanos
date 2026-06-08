@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kyanos
+  namespace: kyanos
+  labels:
+    app: kyanos
+spec:
+  selector:
+    matchLabels:
+      app: kyanos
+  template:
+    metadata:
+      labels:
+        app: kyanos
+    spec:
+      # Target only the specific node
+      nodeSelector:
+        kubernetes.io/hostname: gke-k8s-central-stg--np-cntr-xcntr-sp-7bd87fcc-vwzn
+      hostPID: true
+      hostNetwork: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: kyanos
+          image: IMAGE_PLACEHOLDER
+          command:
+            - kyanos
+          args:
+            - watch
+            - http
+            - --header
+            - "X-B3-Sampled: 1"
+            - --side
+            - server
+            - --json-output
+            - /data/kyanos-capture.jsonl
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: sys-kernel
+              mountPath: /sys/kernel
+              readOnly: true
+            - name: sys-fs-bpf
+              mountPath: /sys/fs/bpf
+            - name: proc
+              mountPath: /proc
+              readOnly: true
+            - name: run-containerd
+              mountPath: /run/containerd
+              readOnly: true
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: sys-kernel
+          hostPath:
+            path: /sys/kernel
+        - name: sys-fs-bpf
+          hostPath:
+            path: /sys/fs/bpf
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: run-containerd
+          hostPath:
+            path: /run/containerd
+        - name: data
+          emptyDir:
+            sizeLimit: 5Gi
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyanos

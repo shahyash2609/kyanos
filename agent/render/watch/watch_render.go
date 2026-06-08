@@ -11,6 +11,7 @@ import (
 	"kyanos/bpf"
 	c "kyanos/common"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -564,6 +565,106 @@ func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, option
 						RecordMaxDumpBytes: 1024,
 					},
 				}))
+			}
+		}
+	} else if options.GCSBucket != "" && options.JsonOutputDir != "" {
+		// Per-pod GCS directory mode: buffer locally in JsonOutputDir, upload
+		// to GCS when each pod's buffer hits GCSBufferSize or on interval.
+		dirUploader, err := NewGCSDirUploader(ctx, options)
+		if err != nil {
+			c.AgentLog.Errorln("Failed to create GCS dir uploader:", err)
+			return
+		}
+		defer dirUploader.Flush()
+		c.AgentLog.Infof("Per-pod GCS dir upload enabled: gs://%s/%s/ (buffer: %d bytes, interval: %s, local: %s)",
+			options.GCSBucket, options.GCSServiceName,
+			options.GCSBufferSize, options.GCSUploadInterval, options.JsonOutputDir)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if err := dirUploader.Write(r.ConnDesc.PodName, append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write record to per-pod GCS buffer:", err)
+				}
+			}
+		}
+	} else if options.GCSBucket != "" {
+		uploader, err := NewGCSUploader(ctx, options)
+		if err != nil {
+			c.AgentLog.Errorln("Failed to create GCS uploader:", err)
+			return
+		}
+		defer uploader.Flush()
+		c.AgentLog.Infof("GCS rolling upload enabled: gs://%s/%s/%s/primary/ (interval: %s)",
+			options.GCSBucket, options.GCSServiceName, options.GCSDeploymentID,
+			options.GCSUploadInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if err := uploader.Write(append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write record to rolling file:", err)
+				}
+			}
+		}
+	} else if options.JsonOutputDir != "" {
+		if err := os.MkdirAll(options.JsonOutputDir, 0755); err != nil {
+			c.AgentLog.Errorln("Failed to create json-output-dir:", err)
+			return
+		}
+		files := make(map[string]*os.File)
+		defer func() {
+			for _, f := range files {
+				f.Close()
+			}
+		}()
+		getOrOpenFile := func(podName string) *os.File {
+			if f, ok := files[podName]; ok {
+				return f
+			}
+			name := podName
+			if name == "" {
+				name = "unknown"
+			}
+			fpath := filepath.Join(options.JsonOutputDir, name+".json")
+			f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				c.AgentLog.Errorln("Failed to open pod output file:", err)
+				return nil
+			}
+			c.AgentLog.Infof("Per-pod output: writing to %s", fpath)
+			files[podName] = f
+			return f
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				f := getOrOpenFile(r.ConnDesc.PodName)
+				if f == nil {
+					continue
+				}
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if _, err := f.Write(append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write JSON to pod file:", err)
+				}
 			}
 		}
 	} else if options.JsonOutput != "" {

@@ -42,6 +42,16 @@ func ParseSide(side string) (common.SideEnum, error) {
 
 var options ac.AgentOptions
 
+// autoReflectFunc is set by cmd/grpc.go's init() so that common.go can call
+// initAutoReflect without a direct import of the grpc package.
+var autoReflectFunc func()
+
+// reflectTargetFunc is set by cmd/grpc.go's init(); called with the --reflect address.
+var reflectTargetFunc func(target string)
+
+// ReflectTarget holds the value of the --reflect flag (bound at watchCmd persistent level).
+var ReflectTarget string
+
 func startAgent() {
 	side, err := ParseSide(SidePar)
 	if err != nil {
@@ -70,6 +80,13 @@ func startAgent() {
 	options.ContainerId = ContainerId
 	options.ContainerName = ContainerName
 	options.PodName = PodName
+
+	if options.WatchOptions.AutoReflect && autoReflectFunc != nil {
+		autoReflectFunc()
+	}
+	if ReflectTarget != "" && reflectTargetFunc != nil {
+		reflectTargetFunc(ReflectTarget)
+	}
 
 	ac.Options = &options
 

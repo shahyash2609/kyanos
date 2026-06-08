@@ -373,6 +373,128 @@ static __inline enum message_type_t is_dns_protocol(const char* buf, size_t coun
   return (qr == 0) ? kRequest : kResponse;
 }
 
+// HTTP/2 frame types (RFC 7540 §6)
+#define HTTP2_FRAME_DATA          0x0
+#define HTTP2_FRAME_HEADERS       0x1
+#define HTTP2_FRAME_PRIORITY      0x2
+#define HTTP2_FRAME_RST_STREAM    0x3
+#define HTTP2_FRAME_SETTINGS      0x4
+#define HTTP2_FRAME_PUSH_PROMISE  0x5
+#define HTTP2_FRAME_PING          0x6
+#define HTTP2_FRAME_GOAWAY        0x7
+#define HTTP2_FRAME_WINDOW_UPDATE 0x8
+#define HTTP2_FRAME_CONTINUATION  0x9
+
+// Validate an HTTP/2 9-byte frame header.
+// Returns kRequest for HEADERS/DATA on odd stream IDs (client-initiated),
+// kResponse for HEADERS/DATA on even or zero stream IDs, kUnknown otherwise.
+static __always_inline enum message_type_t is_http2_frame(const char *hdr) {
+  uint32_t length = ((unsigned char)hdr[0] << 16) |
+                    ((unsigned char)hdr[1] << 8)  |
+                     (unsigned char)hdr[2];
+  uint8_t frame_type = (unsigned char)hdr[3];
+  uint8_t flags = (unsigned char)hdr[4];
+  // Stream ID: top bit is reserved, mask it off.
+  uint32_t stream_id = (((unsigned char)hdr[5] & 0x7f) << 24) |
+                        ((unsigned char)hdr[6] << 16) |
+                        ((unsigned char)hdr[7] << 8)  |
+                         (unsigned char)hdr[8];
+
+  // Sanity: payload must be reasonable (max HTTP/2 default frame is 16384,
+  // but SETTINGS can raise it to 16 MB; use 1 MB as a safe upper bound).
+  if (length > 1048576) {
+    return kUnknown;
+  }
+
+  // Only accept known frame types (0x0 – 0x9).
+  if (frame_type > HTTP2_FRAME_CONTINUATION) {
+    return kUnknown;
+  }
+
+  // Flags sanity: unused bits should be zero per spec.
+  // SETTINGS (type 4) only defines flag 0x1 (ACK).
+  // PING     (type 6) only defines flag 0x1 (ACK).
+  // WINDOW_UPDATE (type 8), PRIORITY (type 2), RST_STREAM (type 3) have no flags.
+  // GOAWAY   (type 7) has no flags.
+  if (frame_type == HTTP2_FRAME_SETTINGS || frame_type == HTTP2_FRAME_PING) {
+    if (flags & ~0x01) {
+      return kUnknown;
+    }
+  }
+
+  // SETTINGS, PING must be on stream 0.
+  if ((frame_type == HTTP2_FRAME_SETTINGS || frame_type == HTTP2_FRAME_PING) && stream_id != 0) {
+    return kUnknown;
+  }
+  // SETTINGS payload must be a multiple of 6.
+  if (frame_type == HTTP2_FRAME_SETTINGS && (length % 6 != 0)) {
+    return kUnknown;
+  }
+  // PING payload must be exactly 8 bytes.
+  if (frame_type == HTTP2_FRAME_PING && length != 8) {
+    return kUnknown;
+  }
+  // WINDOW_UPDATE payload must be exactly 4 bytes.
+  if (frame_type == HTTP2_FRAME_WINDOW_UPDATE && length != 4) {
+    return kUnknown;
+  }
+  // RST_STREAM payload must be exactly 4 bytes.
+  if (frame_type == HTTP2_FRAME_RST_STREAM && length != 4) {
+    return kUnknown;
+  }
+  // GOAWAY must be on stream 0 and at least 8 bytes.
+  if (frame_type == HTTP2_FRAME_GOAWAY && (stream_id != 0 || length < 8)) {
+    return kUnknown;
+  }
+
+  // HEADERS/DATA on a stream: odd stream IDs are client-initiated (request),
+  // even are server-initiated (push promise) or stream 0 (connection-level).
+  if (frame_type == HTTP2_FRAME_HEADERS || frame_type == HTTP2_FRAME_DATA) {
+    if (stream_id == 0) {
+      // DATA on stream 0 is a protocol error; HEADERS on stream 0 also invalid.
+      // But for inference, treat as response side (connection-level).
+      return kResponse;
+    }
+    return (stream_id % 2 == 1) ? kRequest : kResponse;
+  }
+
+  // Connection-level frames (SETTINGS, PING, WINDOW_UPDATE, GOAWAY): classify
+  // as response since they are typically sent by the server first.
+  return kResponse;
+}
+
+// HTTP/2: client sends connection preface "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes).
+// Server responds with SETTINGS frame (9-byte header).
+// For mid-stream detection on existing connections, also detect common HTTP/2
+// frame types (HEADERS, DATA, SETTINGS, PING, WINDOW_UPDATE, GOAWAY).
+static __always_inline enum message_type_t is_http2_protocol(const char *buf, size_t count) {
+  // Client preface
+  static const char preface[24] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+  if (count >= 24) {
+    char buf24[24];
+    bpf_probe_read_user(buf24, 24, buf);
+    if (buf24[0] == preface[0] && buf24[1] == preface[1] && buf24[2] == preface[2] &&
+        buf24[3] == preface[3] && buf24[4] == preface[4] && buf24[5] == preface[5] &&
+        buf24[6] == preface[6] && buf24[7] == preface[7] && buf24[8] == preface[8] &&
+        buf24[9] == preface[9] && buf24[10] == preface[10] && buf24[11] == preface[11] &&
+        buf24[12] == preface[12] && buf24[13] == preface[13] && buf24[14] == preface[14] &&
+        buf24[15] == preface[15] && buf24[16] == preface[16] && buf24[17] == preface[17] &&
+        buf24[18] == preface[18] && buf24[19] == preface[19] && buf24[20] == preface[20] &&
+        buf24[21] == preface[21] && buf24[22] == preface[22] && buf24[23] == preface[23]) {
+      return kRequest;
+    }
+  }
+  // Detect any valid HTTP/2 frame (9-byte header).
+  // This handles mid-stream detection on pre-existing connections where we
+  // missed the initial handshake (common with long-lived gRPC connections).
+  if (count >= 9) {
+    char hdr[9];
+    bpf_probe_read_user(hdr, 9, buf);
+    return is_http2_frame(hdr);
+  }
+  return kUnknown;
+}
+
 #define TRACE_PROTOCOL(p) (trace_protocol == kProtocolUnset || trace_protocol == p)
 
 static __always_inline struct protocol_message_t infer_protocol(const char *buf, size_t count, 
@@ -382,7 +504,13 @@ static __always_inline struct protocol_message_t infer_protocol(const char *buf,
   protocol_message.type = kUnknown;
   conn_info->prepend_length_header = false;
 
-  if (TRACE_PROTOCOL(kProtocolHTTP) && (protocol_message.type = is_http_protocol(buf, count)) != kUnknown) {
+  // Check HTTP/2 before HTTP/1.1: the HTTP/2 client preface starts with "PRI"
+  // which won't match HTTP/1.1 patterns, but HTTP/2 frame headers could be
+  // misclassified if HTTP/1.1 is checked first. For long-lived gRPC connections
+  // where we missed the initial handshake, early HTTP/2 detection is critical.
+  if (TRACE_PROTOCOL(kProtocolHTTP2) && (protocol_message.type = is_http2_protocol(buf, count)) != kUnknown) {
+    protocol_message.protocol = kProtocolHTTP2;
+  } else if (TRACE_PROTOCOL(kProtocolHTTP) && (protocol_message.type = is_http_protocol(buf, count)) != kUnknown) {
     protocol_message.protocol = kProtocolHTTP;
   } else if (TRACE_PROTOCOL(kProtocolMongo) && (protocol_message.type = is_mongo_protocol(buf, count)) != kUnknown)  {
     protocol_message.protocol = kProtocolMongo;

@@ -39,6 +39,10 @@ func (c *ContainerCache) GetByNetNs(ns int64) types.Container {
 	return c.d.GetByNetNs(ns)
 }
 
+func (c *ContainerCache) GetByPidNs(pidNs int64) types.Container {
+	return c.d.GetByPidNs(pidNs)
+}
+
 func (c *ContainerCache) GetByPid(pid int) types.Container {
 	return c.d.GetByPid(pid)
 }

@@ -53,14 +53,11 @@ func applyContainerFilter(ctx context.Context, options *ac.AgentOptions) (*metad
 	case options.ContainerName != "":
 		cs := cc.GetByName(options.ContainerName)
 		cs = removeNonFilterAbleContainers(cs)
-		if len(cs) > 1 {
-			return nil, nil, fmt.Errorf("found more than one containers by name %s", options.ContainerName)
-		}
 		if len(cs) == 0 {
 			return nil, nil, fmt.Errorf("can not find any running container by name %s", options.ContainerName)
 		}
-		container := cs[0]
-		containers = append(containers, container)
+		common.AgentLog.Infof("found %d containers matching name %q", len(cs), options.ContainerName)
+		containers = append(containers, cs...)
 	case options.PodName != "":
 		cs := cc.GetByPodName(options.PodName, options.PodNameSpace)
 		cs = removeNonFilterAbleContainers(cs)
