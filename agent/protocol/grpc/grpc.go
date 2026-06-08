@@ -35,6 +35,8 @@ func (r *ParsedGrpcRequest) FormatToString() string {
 
 func (r *ParsedGrpcRequest) IsReq() bool { return true }
 
+func (r *ParsedGrpcRequest) GetHeaders() map[string]string { return r.Headers }
+
 func (r *ParsedGrpcRequest) StreamId() protocol.StreamId { return protocol.StreamId(r.streamID) }
 
 // ParsedGrpcResponse represents a parsed gRPC response.

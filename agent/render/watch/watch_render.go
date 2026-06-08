@@ -567,6 +567,33 @@ func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, option
 				}))
 			}
 		}
+	} else if options.GCSBucket != "" && options.JsonOutputDir != "" {
+		// Per-pod GCS directory mode: buffer locally in JsonOutputDir, upload
+		// to GCS when each pod's buffer hits GCSBufferSize or on interval.
+		dirUploader, err := NewGCSDirUploader(ctx, options)
+		if err != nil {
+			c.AgentLog.Errorln("Failed to create GCS dir uploader:", err)
+			return
+		}
+		defer dirUploader.Flush()
+		c.AgentLog.Infof("Per-pod GCS dir upload enabled: gs://%s/%s/ (buffer: %d bytes, interval: %s, local: %s)",
+			options.GCSBucket, options.GCSServiceName,
+			options.GCSBufferSize, options.GCSUploadInterval, options.JsonOutputDir)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-ch:
+				jsonData, err := json.Marshal(r)
+				if err != nil {
+					c.AgentLog.Errorln("Failed to marshal record to JSON:", err)
+					continue
+				}
+				if err := dirUploader.Write(r.ConnDesc.PodName, append(jsonData, '\n')); err != nil {
+					c.AgentLog.Errorln("Failed to write record to per-pod GCS buffer:", err)
+				}
+			}
+		}
 	} else if options.GCSBucket != "" {
 		uploader, err := NewGCSUploader(ctx, options)
 		if err != nil {
@@ -611,7 +638,7 @@ func RunWatchRender(ctx context.Context, ch chan *common.AnnotatedRecord, option
 			if name == "" {
 				name = "unknown"
 			}
-			fpath := filepath.Join(options.JsonOutputDir, name+".jsonl")
+			fpath := filepath.Join(options.JsonOutputDir, name+".json")
 			f, err := os.OpenFile(fpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err != nil {
 				c.AgentLog.Errorln("Failed to open pod output file:", err)

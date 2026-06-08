@@ -169,7 +169,15 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 	pid := uint32(connection.TgidFd >> 32)
 	var podName string
 	if Options != nil && Options.Cc != nil {
-		if c := Options.Cc.GetByPid(int(pid)); c.Id != "" {
+		c := Options.Cc.GetByPid(int(pid))
+		// If direct PID match fails (child process), try matching by PID namespace.
+		if c.Id == "" {
+			pidNs := GetPidNamespaceFromPid(int(pid))
+			if pidNs > 0 {
+				c = Options.Cc.GetByPidNs(pidNs)
+			}
+		}
+		if c.Id != "" {
 			pod := c.Pod()
 			if pod.Name != "" {
 				podName = pod.Name + "." + pod.Namespace

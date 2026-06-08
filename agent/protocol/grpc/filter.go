@@ -18,6 +18,7 @@ type GrpcFilter struct {
 	TargetHostName   string
 	TargetMethods    []string
 	TargetHeaders    map[string]string
+	TargetHeaderRegs map[string]*regexp.Regexp
 }
 
 func (f GrpcFilter) FilterByProtocol(p bpf.AgentTrafficProtocolT) bool {
@@ -30,7 +31,8 @@ func (f GrpcFilter) FilterByRequest() bool {
 		len(f.TargetPathPrefix) > 0 ||
 		len(f.TargetMethods) > 0 ||
 		len(f.TargetHostName) > 0 ||
-		len(f.TargetHeaders) > 0
+		len(f.TargetHeaders) > 0 ||
+		len(f.TargetHeaderRegs) > 0
 }
 
 func (GrpcFilter) FilterByResponse() bool {
@@ -67,7 +69,13 @@ func (f GrpcFilter) Filter(parsedReq protocol.ParsedMessage, _ protocol.ParsedMe
 				return false
 			}
 		}
-	} else if len(f.TargetHeaders) > 0 {
+		for wantKey, wantReg := range f.TargetHeaderRegs {
+			gotVal, ok := req.Headers[wantKey]
+			if !ok || !wantReg.MatchString(gotVal) {
+				return false
+			}
+		}
+	} else if len(f.TargetHeaders) > 0 || len(f.TargetHeaderRegs) > 0 {
 		return false
 	}
 	return true

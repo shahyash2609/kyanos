@@ -10,14 +10,13 @@ import (
 
 	"cloud.google.com/go/storage"
 	c "kyanos/common"
-
 	"google.golang.org/api/option"
 )
 
 // GCSUploader writes JSON-line records to a local rolling temp file and uploads
 // completed windows to GCS under:
 //
-//	gs://{bucket}/{serviceName}/{deploymentID}/primary/{YYYY-MM-DD}/{window-start-ts}.jsonl
+//	gs://{bucket}/{serviceName}/{deploymentID}/primary/{YYYY-MM-DD}/{window-start-ts}.json
 //
 // A new window starts immediately after each upload. On shutdown the current
 // (partial) window is uploaded so no data is lost.
@@ -40,12 +39,7 @@ type GCSUploader struct {
 func NewGCSUploader(parentCtx context.Context, opts WatchOptions) (*GCSUploader, error) {
 	prefix := fmt.Sprintf("%s/%s/primary", opts.GCSServiceName, opts.GCSDeploymentID)
 
-	var clientOpts []option.ClientOption
-	if opts.GCSCredentials != "" {
-		clientOpts = append(clientOpts, option.WithCredentialsFile(opts.GCSCredentials))
-	}
-
-	client, err := storage.NewClient(parentCtx, clientOpts...)
+	client, err := newGCSClient(parentCtx, opts.GCSCredentials)
 	if err != nil {
 		return nil, fmt.Errorf("create GCS client: %w", err)
 	}
@@ -147,7 +141,7 @@ func (u *GCSUploader) rotate(openNext bool) {
 }
 
 func (u *GCSUploader) openNewFile() error {
-	f, err := os.CreateTemp("", "kyanos-*.jsonl")
+	f, err := os.CreateTemp("", "kyanos-*.json")
 	if err != nil {
 		return err
 	}
@@ -158,16 +152,27 @@ func (u *GCSUploader) openNewFile() error {
 
 // objectName returns the GCS object path for a given window start time.
 //
-//	{prefix}/{YYYY-MM-DD}/{YYYY-MM-DDTHH-MM-SSZ}.jsonl
+//	{prefix}/{YYYY-MM-DD}/{YYYY-MM-DDTHH-MM-SSZ}.json
 func (u *GCSUploader) objectName(t time.Time) string {
-	date := t.Format("2006-01-02")
-	ts := t.Format("2006-01-02T15-04-05Z")
-	return fmt.Sprintf("%s/%s/%s.jsonl", u.prefix, date, ts)
+	return gcsObjectName(u.prefix, t)
 }
 
 // uploadFile uploads a local file to GCS. Uses a fresh background context so
 // the upload completes even if the parent context has been cancelled.
 func (u *GCSUploader) uploadFile(localPath, objName string) error {
+	return gcsUploadFile(u.client, u.bucket, localPath, objName)
+}
+
+// gcsObjectName builds a GCS object path: {prefix}/{YYYY-MM-DD}/{YYYY-MM-DDTHH-MM-SSZ}.json
+func gcsObjectName(prefix string, t time.Time) string {
+	date := t.Format("2006-01-02")
+	ts := t.Format("2006-01-02T15-04-05Z")
+	return fmt.Sprintf("%s/%s/%s.json", prefix, date, ts)
+}
+
+// gcsUploadFile uploads a local file to GCS. Uses a fresh background context so
+// the upload completes even if the parent context has been cancelled.
+func gcsUploadFile(client *storage.Client, bucket, localPath, objName string) error {
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -177,7 +182,7 @@ func (u *GCSUploader) uploadFile(localPath, objName string) error {
 	uploadCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	w := u.client.Bucket(u.bucket).Object(objName).NewWriter(uploadCtx)
+	w := client.Bucket(bucket).Object(objName).NewWriter(uploadCtx)
 	if _, err := io.Copy(w, f); err != nil {
 		w.Close()
 		return fmt.Errorf("copy to GCS: %w", err)
@@ -186,4 +191,13 @@ func (u *GCSUploader) uploadFile(localPath, objName string) error {
 		return fmt.Errorf("close GCS writer: %w", err)
 	}
 	return nil
+}
+
+// newGCSClient creates a GCS storage client with optional credentials.
+func newGCSClient(ctx context.Context, credentials string) (*storage.Client, error) {
+	var clientOpts []option.ClientOption
+	if credentials != "" {
+		clientOpts = append(clientOpts, option.WithCredentialsFile(credentials))
+	}
+	return storage.NewClient(ctx, clientOpts...)
 }

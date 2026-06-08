@@ -355,7 +355,8 @@ type HttpFilter struct {
 	TargetPathPrefix string
 	TargetHostName   string
 	TargetMethods    []string
-	TargetHeaders    map[string]string // header name (canonical) -> value; request must have each header with this value
+	TargetHeaders    map[string]string         // header name (canonical) -> value; exact match
+	TargetHeaderRegs map[string]*regexp.Regexp  // header name (canonical) -> regex; value must match
 	needFilter       *bool
 }
 
@@ -372,7 +373,8 @@ func (filter HttpFilter) FilterByRequest() bool {
 		len(filter.TargetPathPrefix) > 0 ||
 		len(filter.TargetMethods) > 0 ||
 		len(filter.TargetHostName) > 0 ||
-		len(filter.TargetHeaders) > 0)
+		len(filter.TargetHeaders) > 0 ||
+		len(filter.TargetHeaderRegs) > 0)
 	return *filter.needFilter
 }
 
@@ -390,6 +392,7 @@ func (filter HttpFilter) FilterByResponse() bool {
 // - If TargetMethods is specified, the request method must be one of the methods in TargetMethods.
 // - If TargetHostName is specified, the request host must exactly match TargetHostName.
 // - If TargetHeaders is specified, the request must contain each header with the given value (exact match).
+// - If TargetHeaderRegs is specified, the request must contain each header whose value matches the regex.
 func (filter HttpFilter) Filter(parsedReq ParsedMessage, _ ParsedMessage) bool {
 	req, ok := parsedReq.(*ParsedHttpRequest)
 	if !ok {
@@ -424,6 +427,16 @@ func (filter HttpFilter) Filter(parsedReq ParsedMessage, _ ParsedMessage) bool {
 		}
 		gotVal, ok := req.Headers[wantKey]
 		if !ok || gotVal != wantVal {
+			return false
+		}
+	}
+
+	for wantKey, wantReg := range filter.TargetHeaderRegs {
+		if req.Headers == nil {
+			return false
+		}
+		gotVal, ok := req.Headers[wantKey]
+		if !ok || !wantReg.MatchString(gotVal) {
 			return false
 		}
 	}

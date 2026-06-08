@@ -99,6 +99,12 @@ var grpcCmd = &cobra.Command{
 		}
 		targetHeaders := parseHeaderFilter(headerPairs)
 
+		headerRegexPairs, err := cmd.Flags().GetStringSlice("header-regex")
+		if err != nil {
+			logger.Fatalf("invalid header-regex: %v\n", err)
+		}
+		targetHeaderRegs := parseHeaderRegexFilter(headerRegexPairs)
+
 		options.MessageFilter = grpc.GrpcFilter{
 			TargetPath:       path,
 			TargetPathReg:    pathReg,
@@ -106,6 +112,7 @@ var grpcCmd = &cobra.Command{
 			TargetHostName:   host,
 			TargetMethods:    methods,
 			TargetHeaders:    targetHeaders,
+			TargetHeaderRegs: targetHeaderRegs,
 		}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
@@ -123,6 +130,7 @@ func init() {
 	grpcCmd.Flags().String("path-regex", "", "Specify the regex for gRPC path")
 	grpcCmd.Flags().String("path-prefix", "", "Specify the prefix of gRPC path to monitor")
 	grpcCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value). Can be repeated. Example: --header 'Authorization: Bearer x'")
+	grpcCmd.Flags().StringSlice("header-regex", []string{}, "Filter by request header with regex (key:regex). Can be repeated. Example: --header-regex 'Traceparent:.*-01$'")
 
 	grpcCmd.Flags().SortFlags = false
 	grpcCmd.PersistentFlags().SortFlags = false

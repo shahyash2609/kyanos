@@ -46,6 +46,12 @@ var httpCmd = &cobra.Command{
 		}
 		targetHeaders := parseHeaderFilter(headerPairs)
 
+		headerRegexPairs, err := cmd.Flags().GetStringSlice("header-regex")
+		if err != nil {
+			logger.Fatalf("invalid header-regex: %v\n", err)
+		}
+		targetHeaderRegs := parseHeaderRegexFilter(headerRegexPairs)
+
 		options.MessageFilter = protocol.HttpFilter{
 			TargetPath:       path,
 			TargetPathReg:    pathReg,
@@ -53,6 +59,7 @@ var httpCmd = &cobra.Command{
 			TargetHostName:   host,
 			TargetMethods:    methods,
 			TargetHeaders:    targetHeaders,
+			TargetHeaderRegs: targetHeaderRegs,
 		}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
@@ -67,6 +74,7 @@ func init() {
 	httpCmd.Flags().String("path-regex", "", "Specify the regex for HTTP path to monitor, like: '\\/foo\\/bar\\/\\d+'")
 	httpCmd.Flags().String("path-prefix", "", "Specify the prefix of HTTP path to monitor, like: '/foo'")
 	httpCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value). Can be repeated. Example: --header 'Authorization: Bearer x' --header 'X-Request-Id: abc'")
+	httpCmd.Flags().StringSlice("header-regex", []string{}, "Filter by request header with regex (key:regex). Can be repeated. Example: --header-regex 'Traceparent:.*-01$'")
 
 	httpCmd.Flags().SortFlags = false
 	httpCmd.PersistentFlags().SortFlags = false
@@ -74,6 +82,29 @@ func init() {
 	watchCmd.AddCommand(&copy)
 	copy2 := *httpCmd
 	statCmd.AddCommand(&copy2)
+}
+
+// parseHeaderRegexFilter parses "Name: regex" strings and returns compiled regexps keyed by canonical header name.
+func parseHeaderRegexFilter(pairs []string) map[string]*regexp.Regexp {
+	out := make(map[string]*regexp.Regexp)
+	for _, s := range pairs {
+		s = strings.TrimSpace(s)
+		i := strings.Index(s, ":")
+		if i <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(s[:i])
+		pattern := strings.TrimSpace(s[i+1:])
+		if key == "" || pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			logger.Fatalf("invalid header-regex pattern for %s: %v\n", key, err)
+		}
+		out[http.CanonicalHeaderKey(key)] = re
+	}
+	return out
 }
 
 // parseHeaderFilter parses "Name: Value" strings and returns a map with canonical header keys.
