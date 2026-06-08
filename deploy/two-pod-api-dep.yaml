@@ -1,0 +1,318 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyanos
+---
+# ==== Node hrv6: capture ====
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kyanos-capture-hrv6
+  namespace: kyanos
+  labels:
+    app: kyanos
+    component: capture
+spec:
+  serviceAccountName: gcs-kyanos-ksa
+  hostPID: true
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/hostname: gke-k8s-central-stg--np-infr-sre-vmst-5dde3c84-hrv6
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: debug
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: sys-kernel
+          mountPath: /sys/kernel
+        - name: sys-fs-bpf
+          mountPath: /sys/fs/bpf
+        - name: proc-host
+          mountPath: /host/proc
+          readOnly: true
+        - name: run-containerd
+          mountPath: /run/containerd
+          readOnly: true
+        - name: kyanos-data
+          mountPath: /data/kyanos
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+  volumes:
+    - name: sys-kernel
+      hostPath:
+        path: /sys/kernel
+    - name: sys-fs-bpf
+      hostPath:
+        path: /sys/fs/bpf
+    - name: proc-host
+      hostPath:
+        path: /proc
+    - name: run-containerd
+      hostPath:
+        path: /run/containerd
+    - name: kyanos-data
+      hostPath:
+        path: /var/log/kyanos
+        type: DirectoryOrCreate
+---
+# ==== Node hrv6: collector ====
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kyanos-collector-hrv6
+  namespace: kyanos
+  labels:
+    app: kyanos
+    component: collector
+spec:
+  serviceAccountName: gcs-kyanos-ksa
+  nodeSelector:
+    kubernetes.io/hostname: gke-k8s-central-stg--np-infr-sre-vmst-5dde3c84-hrv6
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: collector
+      image: google/cloud-sdk:slim
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+
+          GCS_BUCKET="gcs-cntr-xcntr-ebpf-kyanos-stg"
+          GCS_PREFIX="stg"
+          DATA_DIR="/data/kyanos"
+          UPLOAD_INTERVAL=60
+          COMPRESS="true"
+          STAGING_DIR="${DATA_DIR}/.staging"
+
+          echo "[collector] bucket=${GCS_BUCKET} prefix=${GCS_PREFIX} compress=${COMPRESS}"
+          mkdir -p "${DATA_DIR}" "${STAGING_DIR}"
+
+          while true; do
+            find "${DATA_DIR}" -maxdepth 1 -name '*.json' -type f | while read -r filepath; do
+              filename=$(basename "${filepath}")
+              filesize=$(stat -c%s "${filepath}" 2>/dev/null || echo 0)
+              [ "${filesize}" -lt 1 ] && continue
+
+              staging_path="${STAGING_DIR}/${filename}"
+              cp "${filepath}" "${staging_path}"
+              truncate -s 0 "${filepath}"
+
+              pod_name="${filename%.json}"
+              date_prefix=$(date -u +%Y-%m-%d)
+              ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+
+              if [ "${COMPRESS}" = "true" ]; then
+                gzip "${staging_path}"
+                staging_path="${staging_path}.gz"
+                gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}.json.gz"
+              else
+                gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}.json"
+              fi
+
+              upload_size=$(stat -c%s "${staging_path}" 2>/dev/null || echo 0)
+              echo "[collector] uploading (${filesize}B -> ${upload_size}B) -> ${gcs_path}"
+              if gsutil -q cp "${staging_path}" "${gcs_path}"; then
+                rm -f "${staging_path}"
+                echo "[collector] done: ${pod_name}"
+              else
+                echo "[collector] FAILED: ${staging_path} (kept for retry)"
+              fi
+            done
+
+            find "${STAGING_DIR}" \( -name '*.json' -o -name '*.json.gz' \) -type f 2>/dev/null | while read -r leftover; do
+              filename=$(basename "${leftover}")
+              pod_name="${filename%.gz}"; pod_name="${pod_name%.json}"
+              date_prefix=$(date -u +%Y-%m-%d)
+              ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+              ext="${filename#"${pod_name}"}"
+              gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}-retry${ext}"
+              echo "[collector] retrying ${leftover} -> ${gcs_path}"
+              if gsutil -q cp "${leftover}" "${gcs_path}"; then
+                rm -f "${leftover}"
+              fi
+            done
+
+            sleep "${UPLOAD_INTERVAL}"
+          done
+      volumeMounts:
+        - name: kyanos-data
+          mountPath: /data/kyanos
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+  volumes:
+    - name: kyanos-data
+      hostPath:
+        path: /var/log/kyanos
+        type: DirectoryOrCreate
+---
+# ==== Node vgvb: capture ====
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kyanos-capture-vgvb
+  namespace: kyanos
+  labels:
+    app: kyanos
+    component: capture
+spec:
+  serviceAccountName: gcs-kyanos-ksa
+  hostPID: true
+  hostNetwork: true
+  nodeSelector:
+    kubernetes.io/hostname: gke-k8s-central-stg--np-infr-sre-vmst-5dde3c84-vgvb
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: debug
+      image: ubuntu:22.04
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: sys-kernel
+          mountPath: /sys/kernel
+        - name: sys-fs-bpf
+          mountPath: /sys/fs/bpf
+        - name: proc-host
+          mountPath: /host/proc
+          readOnly: true
+        - name: run-containerd
+          mountPath: /run/containerd
+          readOnly: true
+        - name: kyanos-data
+          mountPath: /data/kyanos
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+  volumes:
+    - name: sys-kernel
+      hostPath:
+        path: /sys/kernel
+    - name: sys-fs-bpf
+      hostPath:
+        path: /sys/fs/bpf
+    - name: proc-host
+      hostPath:
+        path: /proc
+    - name: run-containerd
+      hostPath:
+        path: /run/containerd
+    - name: kyanos-data
+      hostPath:
+        path: /var/log/kyanos
+        type: DirectoryOrCreate
+---
+# ==== Node vgvb: collector ====
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kyanos-collector-vgvb
+  namespace: kyanos
+  labels:
+    app: kyanos
+    component: collector
+spec:
+  serviceAccountName: gcs-kyanos-ksa
+  nodeSelector:
+    kubernetes.io/hostname: gke-k8s-central-stg--np-infr-sre-vmst-5dde3c84-vgvb
+  tolerations:
+    - operator: Exists
+  containers:
+    - name: collector
+      image: google/cloud-sdk:slim
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+
+          GCS_BUCKET="gcs-cntr-xcntr-ebpf-kyanos-stg"
+          GCS_PREFIX="stg"
+          DATA_DIR="/data/kyanos"
+          UPLOAD_INTERVAL=60
+          COMPRESS="true"
+          STAGING_DIR="${DATA_DIR}/.staging"
+
+          echo "[collector] bucket=${GCS_BUCKET} prefix=${GCS_PREFIX} compress=${COMPRESS}"
+          mkdir -p "${DATA_DIR}" "${STAGING_DIR}"
+
+          while true; do
+            find "${DATA_DIR}" -maxdepth 1 -name '*.json' -type f | while read -r filepath; do
+              filename=$(basename "${filepath}")
+              filesize=$(stat -c%s "${filepath}" 2>/dev/null || echo 0)
+              [ "${filesize}" -lt 1 ] && continue
+
+              staging_path="${STAGING_DIR}/${filename}"
+              cp "${filepath}" "${staging_path}"
+              truncate -s 0 "${filepath}"
+
+              pod_name="${filename%.json}"
+              date_prefix=$(date -u +%Y-%m-%d)
+              ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+
+              if [ "${COMPRESS}" = "true" ]; then
+                gzip "${staging_path}"
+                staging_path="${staging_path}.gz"
+                gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}.json.gz"
+              else
+                gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}.json"
+              fi
+
+              upload_size=$(stat -c%s "${staging_path}" 2>/dev/null || echo 0)
+              echo "[collector] uploading (${filesize}B -> ${upload_size}B) -> ${gcs_path}"
+              if gsutil -q cp "${staging_path}" "${gcs_path}"; then
+                rm -f "${staging_path}"
+                echo "[collector] done: ${pod_name}"
+              else
+                echo "[collector] FAILED: ${staging_path} (kept for retry)"
+              fi
+            done
+
+            find "${STAGING_DIR}" \( -name '*.json' -o -name '*.json.gz' \) -type f 2>/dev/null | while read -r leftover; do
+              filename=$(basename "${leftover}")
+              pod_name="${filename%.gz}"; pod_name="${pod_name%.json}"
+              date_prefix=$(date -u +%Y-%m-%d)
+              ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+              ext="${filename#"${pod_name}"}"
+              gcs_path="gs://${GCS_BUCKET}/${GCS_PREFIX}/${pod_name}/${date_prefix}/${ts}-retry${ext}"
+              echo "[collector] retrying ${leftover} -> ${gcs_path}"
+              if gsutil -q cp "${leftover}" "${gcs_path}"; then
+                rm -f "${leftover}"
+              fi
+            done
+
+            sleep "${UPLOAD_INTERVAL}"
+          done
+      volumeMounts:
+        - name: kyanos-data
+          mountPath: /data/kyanos
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+  volumes:
+    - name: kyanos-data
+      hostPath:
+        path: /var/log/kyanos
+        type: DirectoryOrCreate
