@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"kyanos/agent/protocol"
 
 	"github.com/spf13/cobra"
 )
 
 var maxRecords int
-var supportedProtocols = []string{"http", "redis", "mysql", "rocketmq", "kafka", "mongodb", "dns"}
+var supportedProtocols = []string{"http", "grpc", "redis", "mysql", "rocketmq", "kafka", "mongodb", "dns"}
 var watchCmd = &cobra.Command{
 	Use: "watch [http|redis|mysql|rocketmq|mongodb|dns] [flags]",
 	Example: `
@@ -30,6 +31,17 @@ sudo kyanos watch rocketmq --request-codes 10,11 --languages JAVA,Go
 				if len(args) > 0 {
 					logger.Fatalln("current only support:", supportedProtocols)
 				}
+
+				// Check for header filters on the top-level watch command.
+				headerPairs, _ := cmd.Flags().GetStringSlice("header")
+				headerRegexPairs, _ := cmd.Flags().GetStringSlice("header-regex")
+				if len(headerPairs) > 0 || len(headerRegexPairs) > 0 {
+					options.MessageFilter = protocol.MultiProtocolHeaderFilter{
+						TargetHeaders:    parseHeaderFilter(headerPairs),
+						TargetHeaderRegs: parseHeaderRegexFilter(headerRegexPairs),
+					}
+				}
+
 				options.LatencyFilter = initLatencyFilter(cmd)
 				options.SizeFilter = initSizeFilter(cmd)
 				startAgent()
@@ -40,18 +52,32 @@ sudo kyanos watch rocketmq --request-codes 10,11 --languages JAVA,Go
 
 func init() {
 	watchCmd.Flags().BoolP("list", "l", false, "list all support protocols")
+	watchCmd.Flags().StringSlice("header", []string{}, "Filter by request header (key:value) across all protocols. Can be repeated.")
+	watchCmd.Flags().StringSlice("header-regex", []string{}, "Filter by request header with regex (key:regex) across all protocols. Can be repeated. Example: --header-regex 'Traceparent:.*'")
 	watchCmd.PersistentFlags().Float64("latency", 0, "Filter based on request response time")
 	watchCmd.PersistentFlags().Int64("req-size", 0, "Filter based on request bytes size")
 	watchCmd.PersistentFlags().Int64("resp-size", 0, "Filter based on response bytes size")
 	watchCmd.PersistentFlags().IntVar(&maxRecords, "max-records", 100, "Limit the max number of table records")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.DebugOutput, "debug-output", false, "Print output to console instead display ui")
 	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.JsonOutput, "json-output", "", "Output in JSON format. Use 'stdout' to print to terminal, or provide a file path to write to a file")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.JsonOutputDir, "json-output-dir", "", "Per-pod JSONL output directory; writes <dir>/<pod_name>.json for each observed pod")
+	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.AutoReflect, "auto-reflect", false, "Auto-discover all listening ports on this node and probe gRPC server reflection")
+	watchCmd.PersistentFlags().StringVar(&ReflectTarget, "reflect", "", "gRPC server address (host:port) for server reflection to decode protobuf bodies")
 	watchCmd.PersistentFlags().StringVar(&SidePar, "side", "all", "Filter based on connection side. can be: server | client")
 	watchCmd.PersistentFlags().StringVarP(&options.WatchOptions.Opts, "output", "o", "", "Can be `wide`")
 	watchCmd.PersistentFlags().IntVar(&options.WatchOptions.MaxRecordContentDisplayBytes, "max-print-bytes", 1024, "Control how may bytes of record's req/resp can be printed, \n exceeded part are truncated")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceDevEvent, "trace-dev-event", true, "Collect dev layer events to measure network interface time spent.")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceSocketEvent, "trace-socket-event", false, "Collect socket layer events to measure the time spent on socket data copying.")
 	watchCmd.PersistentFlags().BoolVar(&options.WatchOptions.TraceSslEvent, "trace-ssl-event", true, "Collect SSL events to trace SSL connection data.")
+
+	// GCS rolling-file upload flags.
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSBucket, "gcs-bucket", "", "GCS bucket name for rolling-file upload (enables GCS mode)")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSServiceName, "gcs-service-name", "", "Service name used in GCS path: {service}/{deployment}/primary/")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSDeploymentID, "gcs-deployment-id", "", "Deployment ID used in GCS path: {service}/{deployment}/primary/")
+	watchCmd.PersistentFlags().DurationVar(&options.WatchOptions.GCSUploadInterval, "gcs-upload-interval", 0, "How often to roll and upload to GCS (default 3m)")
+	watchCmd.PersistentFlags().StringVar(&options.WatchOptions.GCSCredentials, "gcs-credentials", "", "Path to GCS service-account JSON key file (uses Application Default Credentials if omitted)")
+	watchCmd.PersistentFlags().Int64Var(&options.WatchOptions.GCSBufferSize, "gcs-buffer-size", 0, "Per-pod buffer size in bytes before uploading to GCS (default 10MB, used with --json-output-dir + --gcs-bucket)")
+
 	watchCmd.Flags().SortFlags = false
 	watchCmd.PersistentFlags().SortFlags = false
 	rootCmd.AddCommand(watchCmd)

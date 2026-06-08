@@ -166,15 +166,34 @@ func (s *StatRecorder) ReceiveRecord(r protocol.Record, connection *conn.Connect
 	if connection.IsServerSide() {
 		side = ServerSide
 	}
+	pid := uint32(connection.TgidFd >> 32)
+	var podName string
+	if Options != nil && Options.Cc != nil {
+		c := Options.Cc.GetByPid(int(pid))
+		// If direct PID match fails (child process), try matching by PID namespace.
+		if c.Id == "" {
+			pidNs := GetPidNamespaceFromPid(int(pid))
+			if pidNs > 0 {
+				c = Options.Cc.GetByPidNs(pidNs)
+			}
+		}
+		if c.Id != "" {
+			pod := c.Pod()
+			if pod.Name != "" {
+				podName = pod.Name + "." + pod.Namespace
+			}
+		}
+	}
 	annotatedRecord.ConnDesc = ConnDesc{
 		RemotePort: Port(connection.RemotePort),
 		RemoteAddr: connection.RemoteIp,
 		LocalAddr:  connection.LocalIp,
 		LocalPort:  Port(connection.LocalPort),
 		Protocol:   uint32(connection.Protocol),
-		Pid:        uint32(connection.TgidFd >> 32),
+		Pid:        pid,
 		Side:       side,
 		IsSsl:      connection.IsSsl(),
+		PodName:    podName,
 	}
 
 	events := prepareEvents(r, connection)

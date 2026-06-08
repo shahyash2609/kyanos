@@ -2,6 +2,9 @@ package protocol
 
 import (
 	"bufio"
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"kyanos/agent/buffer"
@@ -26,6 +29,17 @@ func init() {
 var HTTP_REQ_START_PATTERN = []string{"GET ", "HEAD ", "POST ", "PUT ", "DELETE ", "CONNECT ", "OPTIONS ", "TRACE ", "PATCH "}
 var HTTP_RESP_START_PATTERN = []string{"HTTP/1.1 ", "HTTP/1.0 "}
 var HTTP_BOUNDARY_MARKER = "\r\n\r\n"
+
+// copyFirstHeaderValues returns a map of canonical header name to first value from h.
+func copyFirstHeaderValues(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if len(v) > 0 {
+			out[k] = strings.TrimSpace(v[0])
+		}
+	}
+	return out
+}
 
 type HTTPStreamParser struct {
 }
@@ -94,8 +108,10 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 			}
 		}
 	} else {
+		var reqBody []byte
 		if req.ContentLength > 0 {
-			reqBody, err := io.ReadAll(req.Body)
+			var err error
+			reqBody, err = io.ReadAll(req.Body)
 			if err != nil {
 				if err == io.EOF || err == io.ErrUnexpectedEOF {
 					return ParseResult{
@@ -112,6 +128,14 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 			}
 		}
 		readIndex := common.GetBufioReaderReadIndex(bufioReader)
+		displayBuf := []byte(buf[:readIndex])
+		if len(reqBody) > 0 {
+			if decompressed, ok := decompressHTTPBody(reqBody, req.Header.Get("Content-Encoding")); ok {
+				if headerEnd := strings.Index(buf[:readIndex], "\r\n\r\n"); headerEnd != -1 {
+					displayBuf = append([]byte(buf[:headerEnd+4]), decompressed...)
+				}
+			}
+		}
 		parseResult.ReadBytes = readIndex
 		parseResult.ParsedMessages = []ParsedMessage{
 			&ParsedHttpRequest{
@@ -119,7 +143,8 @@ func (h *HTTPStreamParser) ParseRequest(buf string, messageType MessageType, tim
 				Host:      req.Host,
 				Method:    req.Method,
 				Path:      req.URL.Path,
-				buf:       []byte(buf[:readIndex]),
+				Headers:   copyFirstHeaderValues(req.Header),
+				buf:       displayBuf,
 			},
 		}
 		parseResult.ParseState = Success
@@ -149,15 +174,55 @@ func (h *HTTPStreamParser) ParseResponse(buf string, messageType MessageType, ti
 			ParseState: NeedsMoreData,
 		}
 	}
+
+	displayBuf := []byte(buf[:readIndex])
+	if decompressed, ok := decompressHTTPBody(respBody, resp.Header.Get("Content-Encoding")); ok {
+		if headerEnd := strings.Index(buf[:readIndex], "\r\n\r\n"); headerEnd != -1 {
+			displayBuf = append([]byte(buf[:headerEnd+4]), decompressed...)
+		}
+	}
+
 	parseResult.ReadBytes = readIndex
 	parseResult.ParsedMessages = []ParsedMessage{
 		&ParsedHttpResponse{
 			FrameBase: NewFrameBase(timestamp, readIndex, seq),
-			buf:       []byte(buf[:readIndex]),
+			buf:       displayBuf,
 		},
 	}
 	parseResult.ParseState = Success
 	return parseResult
+}
+
+func decompressHTTPBody(body []byte, contentEncoding string) ([]byte, bool) {
+	if len(body) == 0 {
+		return nil, false
+	}
+	switch strings.ToLower(strings.TrimSpace(contentEncoding)) {
+	case "gzip", "x-gzip":
+		gr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			common.ProtocolParserLog.Debugf("[HTTP] failed to create gzip reader: %v", err)
+			return nil, false
+		}
+		defer gr.Close()
+		decompressed, err := io.ReadAll(gr)
+		if err != nil {
+			common.ProtocolParserLog.Debugf("[HTTP] failed to decompress gzip body: %v", err)
+			return nil, false
+		}
+		return decompressed, true
+	case "deflate":
+		fr := flate.NewReader(bytes.NewReader(body))
+		defer fr.Close()
+		decompressed, err := io.ReadAll(fr)
+		if err != nil {
+			common.ProtocolParserLog.Debugf("[HTTP] failed to decompress deflate body: %v", err)
+			return nil, false
+		}
+		return decompressed, true
+	default:
+		return nil, false
+	}
 }
 
 func (h *HTTPStreamParser) handleReadResponseError(err error, buf string, streamBuffer *buffer.StreamBuffer, messageType MessageType, timestamp uint64, seq uint64) ParseResult {
@@ -231,9 +296,10 @@ func (h *HTTPStreamParser) ParseStream(streamBuffer *buffer.StreamBuffer, messag
 
 type ParsedHttpRequest struct {
 	FrameBase
-	Path   string
-	Host   string
-	Method string
+	Path    string
+	Host    string
+	Method  string
+	Headers map[string]string // canonical header name -> first value
 
 	buf []byte
 }
@@ -289,6 +355,8 @@ type HttpFilter struct {
 	TargetPathPrefix string
 	TargetHostName   string
 	TargetMethods    []string
+	TargetHeaders    map[string]string         // header name (canonical) -> value; exact match
+	TargetHeaderRegs map[string]*regexp.Regexp  // header name (canonical) -> regex; value must match
 	needFilter       *bool
 }
 
@@ -304,7 +372,9 @@ func (filter HttpFilter) FilterByRequest() bool {
 		filter.TargetPathReg != nil ||
 		len(filter.TargetPathPrefix) > 0 ||
 		len(filter.TargetMethods) > 0 ||
-		len(filter.TargetHostName) > 0)
+		len(filter.TargetHostName) > 0 ||
+		len(filter.TargetHeaders) > 0 ||
+		len(filter.TargetHeaderRegs) > 0)
 	return *filter.needFilter
 }
 
@@ -312,7 +382,7 @@ func (filter HttpFilter) FilterByResponse() bool {
 	return false
 }
 
-// Filter filters HTTP requests based on various criteria such as path, path prefix, path regex, method, and host name.
+// Filter filters HTTP requests based on various criteria such as path, path prefix, path regex, method, host name, and headers.
 // It returns true if the request matches all the specified criteria, otherwise it returns false.
 //
 // The filtering logic is as follows:
@@ -321,6 +391,8 @@ func (filter HttpFilter) FilterByResponse() bool {
 // - If TargetPathReg is specified, the request path must match the regular expression TargetPathReg.
 // - If TargetMethods is specified, the request method must be one of the methods in TargetMethods.
 // - If TargetHostName is specified, the request host must exactly match TargetHostName.
+// - If TargetHeaders is specified, the request must contain each header with the given value (exact match).
+// - If TargetHeaderRegs is specified, the request must contain each header whose value matches the regex.
 func (filter HttpFilter) Filter(parsedReq ParsedMessage, _ ParsedMessage) bool {
 	req, ok := parsedReq.(*ParsedHttpRequest)
 	if !ok {
@@ -347,6 +419,26 @@ func (filter HttpFilter) Filter(parsedReq ParsedMessage, _ ParsedMessage) bool {
 
 	if filter.TargetHostName != "" && filter.TargetHostName != req.Host {
 		return false
+	}
+
+	for wantKey, wantVal := range filter.TargetHeaders {
+		if req.Headers == nil {
+			return false
+		}
+		gotVal, ok := req.Headers[wantKey]
+		if !ok || gotVal != wantVal {
+			return false
+		}
+	}
+
+	for wantKey, wantReg := range filter.TargetHeaderRegs {
+		if req.Headers == nil {
+			return false
+		}
+		gotVal, ok := req.Headers[wantKey]
+		if !ok || !wantReg.MatchString(gotVal) {
+			return false
+		}
 	}
 
 	return true

@@ -2,6 +2,9 @@ package protocol_test
 
 import (
 	"bufio"
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"kyanos/agent/buffer"
@@ -143,6 +146,8 @@ func TestParseRequest(t *testing.T) {
 	assert.Equal(t, "GET", httpReq.Method)
 	assert.Equal(t, "/abc", httpReq.Path)
 	assert.Equal(t, "www.baidu.com", httpReq.Host)
+	assert.NotNil(t, httpReq.Headers)
+	assert.Equal(t, "www.baidu.com", httpReq.Headers["Host"])
 }
 
 func TestParseResponse(t *testing.T) {
@@ -164,6 +169,132 @@ func TestParseResponse(t *testing.T) {
 	assert.Equal(t, uint64(20), message.Seq())
 }
 
+func gzipCompress(data []byte) []byte {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
+}
+
+func deflateCompress(data []byte) []byte {
+	var buf bytes.Buffer
+	w, _ := flate.NewWriter(&buf, flate.DefaultCompression)
+	w.Write(data)
+	w.Close()
+	return buf.Bytes()
+}
+
+func buildHTTPResponse(statusLine string, headers map[string]string, body []byte) string {
+	var b strings.Builder
+	b.WriteString(statusLine + "\r\n")
+	for k, v := range headers {
+		b.WriteString(k + ": " + v + "\r\n")
+	}
+	b.WriteString("\r\n")
+	b.Write(body)
+	return b.String()
+}
+
+func buildHTTPRequest(method, path string, headers map[string]string, body []byte) string {
+	var b strings.Builder
+	b.WriteString(method + " " + path + " HTTP/1.1\r\n")
+	for k, v := range headers {
+		b.WriteString(k + ": " + v + "\r\n")
+	}
+	b.WriteString("\r\n")
+	if len(body) > 0 {
+		b.Write(body)
+	}
+	return b.String()
+}
+
+func TestParseRequest_GzipBody(t *testing.T) {
+	plainBody := "hello gzip request body!"
+	compressedBody := gzipCompress([]byte(plainBody))
+
+	httpMessage := buildHTTPRequest("POST", "/upload", map[string]string{
+		"Host":             "example.com",
+		"Content-Type":     "application/octet-stream",
+		"Content-Encoding": "gzip",
+		"Content-Length":   fmt.Sprintf("%d", len(compressedBody)),
+	}, compressedBody)
+
+	parser := protocol.HTTPStreamParser{}
+	result := parser.ParseRequest(httpMessage, protocol.Request, 10, 20)
+
+	assert.Equal(t, protocol.Success, result.ParseState)
+	assert.Equal(t, 1, len(result.ParsedMessages))
+
+	req := result.ParsedMessages[0]
+	formatted := req.FormatToString()
+	assert.Contains(t, formatted, plainBody, "decompressed request body should be present in output")
+	assert.Contains(t, formatted, "Content-Encoding: gzip", "original headers should be preserved")
+}
+
+func TestParseResponse_GzipBody(t *testing.T) {
+	plainBody := "hello gzip world!"
+	compressedBody := gzipCompress([]byte(plainBody))
+
+	httpMessage := buildHTTPResponse("HTTP/1.1 200 OK", map[string]string{
+		"Content-Type":     "text/plain",
+		"Content-Encoding": "gzip",
+		"Content-Length":   fmt.Sprintf("%d", len(compressedBody)),
+	}, compressedBody)
+
+	buf := buffer.New(4096)
+	buf.Add(10, []byte(httpMessage), 10000)
+
+	parser := protocol.HTTPStreamParser{}
+	result := parser.ParseResponse(httpMessage, protocol.Response, 10, 20, buf)
+
+	assert.Equal(t, protocol.Success, result.ParseState)
+	assert.Equal(t, 1, len(result.ParsedMessages))
+
+	resp := result.ParsedMessages[0]
+	formatted := resp.FormatToString()
+	assert.Contains(t, formatted, plainBody, "decompressed body should be present in output")
+	assert.Contains(t, formatted, "Content-Encoding: gzip", "original headers should be preserved")
+}
+
+func TestParseResponse_DeflateBody(t *testing.T) {
+	plainBody := "hello deflate world!"
+	compressedBody := deflateCompress([]byte(plainBody))
+
+	httpMessage := buildHTTPResponse("HTTP/1.1 200 OK", map[string]string{
+		"Content-Type":     "text/plain",
+		"Content-Encoding": "deflate",
+		"Content-Length":   fmt.Sprintf("%d", len(compressedBody)),
+	}, compressedBody)
+
+	buf := buffer.New(4096)
+	buf.Add(10, []byte(httpMessage), 10000)
+
+	parser := protocol.HTTPStreamParser{}
+	result := parser.ParseResponse(httpMessage, protocol.Response, 10, 20, buf)
+
+	assert.Equal(t, protocol.Success, result.ParseState)
+	assert.Equal(t, 1, len(result.ParsedMessages))
+
+	resp := result.ParsedMessages[0]
+	formatted := resp.FormatToString()
+	assert.Contains(t, formatted, plainBody, "decompressed body should be present in output")
+}
+
+func TestParseResponse_NoEncoding(t *testing.T) {
+	buf := buffer.New(1000)
+	httpMessage := httpRespMessage + httpRespMessage
+	buf.Add(10, []byte(httpMessage), 10000)
+
+	parser := protocol.HTTPStreamParser{}
+	result := parser.ParseResponse(httpMessage, protocol.Response, 10, 20, buf)
+
+	assert.Equal(t, protocol.Success, result.ParseState)
+	resp := result.ParsedMessages[0]
+	formatted := resp.FormatToString()
+	assert.Contains(t, formatted, "pixielabs is awesome!", "uncompressed body should remain unchanged")
+}
+
 func TestHttpFilter_Filter(t *testing.T) {
 	type fields struct {
 		TargetPath       string
@@ -171,6 +302,7 @@ func TestHttpFilter_Filter(t *testing.T) {
 		TargetPathPrefix string
 		TargetHostName   string
 		TargetMethods    []string
+		TargetHeaders    map[string]string
 	}
 	type args struct {
 		parsedReq protocol.ParsedMessage
@@ -320,6 +452,42 @@ func TestHttpFilter_Filter(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "filter_by_header",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123", "Authorization": "Bearer token"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"X-Request-Id": "abc-123", "Authorization": "Bearer token"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "not_filter_by_header_missing_key",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"Other": "val"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "not_filter_by_header_wrong_value",
+			fields: fields{
+				TargetHeaders: map[string]string{"X-Request-Id": "abc-123"},
+			},
+			args: args{
+				parsedReq: &protocol.ParsedHttpRequest{
+					Headers: map[string]string{"X-Request-Id": "different"},
+				},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -329,6 +497,7 @@ func TestHttpFilter_Filter(t *testing.T) {
 				TargetPathPrefix: tt.fields.TargetPathPrefix,
 				TargetHostName:   tt.fields.TargetHostName,
 				TargetMethods:    tt.fields.TargetMethods,
+				TargetHeaders:    tt.fields.TargetHeaders,
 			}
 			assert.Equalf(t, tt.want, filter.Filter(tt.args.parsedReq, nil), "Filter(%v, %v)", tt.args.parsedReq, nil)
 		})
